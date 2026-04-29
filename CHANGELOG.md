@@ -2,6 +2,14 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [1.0.0] - 2026-04-29
+
+First stable release.
+
+### Changed
+- Upgraded to Varnish 8.0 and Wasmtime 44
+- Fixed `hdr_t` compatibility for Varnish 8 API
+
 ## [0.1.0] - 2026-04-29
 
 ### Added

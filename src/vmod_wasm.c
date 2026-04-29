@@ -32,7 +32,7 @@
 #include "vcc_if.h"
 #include "wasm_engine.h"
 
-#define VMOD_WASM_VERSION "0.1.0"
+#define VMOD_WASM_VERSION "1.0.0"
 
 /* Global Wasm engine — shared across all VCL instances and threads */
 static struct vwasm_engine *vwasm_engine_global = NULL;

@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT([vmod-wasm], [0.1.0], [https://github.com/RamazanKara/vmod-wasm/issues])
+AC_INIT([vmod-wasm], [1.0.0], [https://github.com/RamazanKara/vmod-wasm/issues])
 AC_CONFIG_SRCDIR([src/vmod_wasm.vcc])
 AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_HEADERS([config.h])
