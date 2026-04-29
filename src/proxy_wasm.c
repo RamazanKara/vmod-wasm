@@ -192,13 +192,15 @@ pw_proxy_log(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
-	if (ctx == NULL || ctx->vrt_ctx == NULL) {
+	AN(ctx);
+	if (ctx->vrt_ctx == NULL) {
 		results[0].kind = WASMTIME_I32;
 		results[0].of.i32 = PROXY_INTERNAL;
 		return (NULL);
 	}
 
 	vctx = ctx->vrt_ctx;
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
 	level = args[0].of.i32;
 
 	if (pw_read_string(ctx, (uint32_t)args[1].of.i32,
@@ -265,12 +267,8 @@ pw_proxy_get_header_map_value(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
 	results[0].kind = WASMTIME_I32;
-
-	if (ctx == NULL) {
-		results[0].of.i32 = PROXY_INTERNAL;
-		return (NULL);
-	}
 
 	hp = pw_get_header_map(ctx, args[0].of.i32);
 	if (hp == NULL) {
@@ -331,14 +329,16 @@ pw_proxy_add_header_map_value(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
 	results[0].kind = WASMTIME_I32;
 
-	if (ctx == NULL || ctx->vrt_ctx == NULL) {
+	if (ctx->vrt_ctx == NULL) {
 		results[0].of.i32 = PROXY_INTERNAL;
 		return (NULL);
 	}
 
 	vctx = ctx->vrt_ctx;
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
 
 	/* Only support request headers for now */
 	if (args[0].of.i32 == PROXY_MAP_HTTP_REQUEST_HEADERS)
@@ -405,14 +405,16 @@ pw_proxy_remove_header_map_value(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
 	results[0].kind = WASMTIME_I32;
 
-	if (ctx == NULL || ctx->vrt_ctx == NULL) {
+	if (ctx->vrt_ctx == NULL) {
 		results[0].of.i32 = PROXY_INTERNAL;
 		return (NULL);
 	}
 
 	vctx = ctx->vrt_ctx;
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
 
 	if (args[0].of.i32 == PROXY_MAP_HTTP_REQUEST_HEADERS)
 		hp = (struct http *)vctx->http_req;
@@ -472,14 +474,16 @@ pw_proxy_get_property(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
 	results[0].kind = WASMTIME_I32;
 
-	if (ctx == NULL || ctx->vrt_ctx == NULL) {
+	if (ctx->vrt_ctx == NULL) {
 		results[0].of.i32 = PROXY_INTERNAL;
 		return (NULL);
 	}
 
 	vctx = ctx->vrt_ctx;
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
 
 	if (pw_read_string(ctx, (uint32_t)args[0].of.i32,
 	    (uint32_t)args[1].of.i32, path_buf, sizeof(path_buf)) != 0) {
@@ -545,12 +549,8 @@ pw_proxy_send_local_response(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
 	results[0].kind = WASMTIME_I32;
-
-	if (ctx == NULL) {
-		results[0].of.i32 = PROXY_INTERNAL;
-		return (NULL);
-	}
 
 	ctx->local_response_set = 1;
 	ctx->local_response_code = args[0].of.i32;
@@ -576,12 +576,8 @@ pw_proxy_get_current_time(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
 	results[0].kind = WASMTIME_I32;
-
-	if (ctx == NULL) {
-		results[0].of.i32 = PROXY_INTERNAL;
-		return (NULL);
-	}
 
 	clock_gettime(CLOCK_REALTIME, &ts);
 	nanos = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
@@ -637,12 +633,8 @@ pw_proxy_get_buffer_bytes(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
 	results[0].kind = WASMTIME_I32;
-
-	if (ctx == NULL) {
-		results[0].of.i32 = PROXY_INTERNAL;
-		return (NULL);
-	}
 
 	/* Return empty buffer for all types */
 	if (pw_write_u32(ctx, (uint32_t)args[3].of.i32, 0) != 0 ||

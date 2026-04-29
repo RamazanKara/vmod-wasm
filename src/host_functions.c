@@ -124,6 +124,7 @@ host_get_request_header(void *env, wasmtime_caller_t *caller,
 
 	ctx = wasmtime_caller_context(caller);
 	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+	AN(hctx);
 	hctx->wasm_ctx = ctx;
 
 	results[0].kind = WASMTIME_I32;
@@ -132,10 +133,13 @@ host_get_request_header(void *env, wasmtime_caller_t *caller,
 	vctx = hctx->vrt_ctx;
 	if (vctx == NULL || vctx->req == NULL)
 		return (NULL);
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(vctx->req, REQ_MAGIC);
 
 	hp = vctx->req->http;
 	if (hp == NULL)
 		return (NULL);
+	CHECK_OBJ_NOTNULL(hp, HTTP_MAGIC);
 
 	hdr_name = read_wasm_string(hctx, args[0].of.i32, args[1].of.i32);
 	if (hdr_name == NULL)
@@ -190,6 +194,7 @@ host_get_request_url(void *env, wasmtime_caller_t *caller,
 
 	ctx = wasmtime_caller_context(caller);
 	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+	AN(hctx);
 	hctx->wasm_ctx = ctx;
 
 	results[0].kind = WASMTIME_I32;
@@ -198,6 +203,9 @@ host_get_request_url(void *env, wasmtime_caller_t *caller,
 	vctx = hctx->vrt_ctx;
 	if (vctx == NULL || vctx->req == NULL || vctx->req->http == NULL)
 		return (NULL);
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(vctx->req, REQ_MAGIC);
+	CHECK_OBJ_NOTNULL(vctx->req->http, HTTP_MAGIC);
 
 	url = vctx->req->http->hd[HTTP_HDR_URL].b;
 	if (url == NULL)
@@ -230,6 +238,7 @@ host_get_request_method(void *env, wasmtime_caller_t *caller,
 
 	ctx = wasmtime_caller_context(caller);
 	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+	AN(hctx);
 	hctx->wasm_ctx = ctx;
 
 	results[0].kind = WASMTIME_I32;
@@ -238,6 +247,9 @@ host_get_request_method(void *env, wasmtime_caller_t *caller,
 	vctx = hctx->vrt_ctx;
 	if (vctx == NULL || vctx->req == NULL || vctx->req->http == NULL)
 		return (NULL);
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(vctx->req, REQ_MAGIC);
+	CHECK_OBJ_NOTNULL(vctx->req->http, HTTP_MAGIC);
 
 	method = vctx->req->http->hd[HTTP_HDR_METHOD].b;
 	if (method == NULL)
@@ -270,6 +282,7 @@ host_get_client_ip(void *env, wasmtime_caller_t *caller,
 
 	ctx = wasmtime_caller_context(caller);
 	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+	AN(hctx);
 	hctx->wasm_ctx = ctx;
 
 	results[0].kind = WASMTIME_I32;
@@ -278,6 +291,7 @@ host_get_client_ip(void *env, wasmtime_caller_t *caller,
 	vctx = hctx->vrt_ctx;
 	if (vctx == NULL)
 		return (NULL);
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
 
 	ip_str = VRT_IP_string(vctx, VRT_r_client_ip(vctx));
 	if (ip_str == NULL)
@@ -313,6 +327,7 @@ host_set_response_header(void *env, wasmtime_caller_t *caller,
 
 	ctx = wasmtime_caller_context(caller);
 	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+	AN(hctx);
 	hctx->wasm_ctx = ctx;
 
 	results[0].kind = WASMTIME_I32;
@@ -321,6 +336,8 @@ host_set_response_header(void *env, wasmtime_caller_t *caller,
 	vctx = hctx->vrt_ctx;
 	if (vctx == NULL || vctx->req == NULL)
 		return (NULL);
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
+	CHECK_OBJ_NOTNULL(vctx->req, REQ_MAGIC);
 
 	name = read_wasm_string(hctx, args[0].of.i32, args[1].of.i32);
 	if (name == NULL)
@@ -373,11 +390,13 @@ host_log_msg(void *env, wasmtime_caller_t *caller,
 
 	ctx = wasmtime_caller_context(caller);
 	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+	AN(hctx);
 	hctx->wasm_ctx = ctx;
 
 	vctx = hctx->vrt_ctx;
 	if (vctx == NULL || vctx->vsl == NULL)
 		return (NULL);
+	CHECK_OBJ_NOTNULL(vctx, VRT_CTX_MAGIC);
 
 	level = args[0].of.i32;
 	msg = read_wasm_string(hctx, args[1].of.i32, args[2].of.i32);
