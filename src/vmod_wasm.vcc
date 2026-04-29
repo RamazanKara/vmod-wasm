@@ -13,6 +13,8 @@ processing.
 
 $Function VOID load(STRING name, STRING path)
 
+$Restrict vcl_init
+
 Load a Wasm module from disk. The module is compiled once at VCL
 init time and can be instantiated cheaply per-request.
 
@@ -27,6 +29,8 @@ Example::
     }
 
 $Function INT execute(STRING name, STRING function)
+
+$Restrict client
 
 Execute an exported function from a loaded Wasm module.
 Returns the integer result of the Wasm function.
@@ -53,6 +57,8 @@ Example::
 
 $Function VOID set_fuel(INT fuel)
 
+$Restrict vcl_init
+
 Set the fuel (instruction) limit for Wasm execution. Higher values
 allow more complex computations. Default is 1000000.
 
@@ -68,6 +74,8 @@ Example::
     }
 
 $Function VOID set_memory_limit(INT limit)
+
+$Restrict vcl_init
 
 Set the maximum linear memory size for Wasm modules in bytes. If a
 module tries to grow memory beyond this limit, the operation fails.
@@ -93,6 +101,8 @@ $Function INT get_memory_limit()
 Return the current memory limit in bytes.
 
 $Function INT proxy_wasm_on_request(STRING module)
+
+$Restrict client
 
 Execute a Proxy-Wasm filter module for the current HTTP request.
 
