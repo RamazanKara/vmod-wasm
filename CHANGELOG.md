@@ -2,6 +2,14 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [1.0.1] - 2026-04-29
+
+### Changed
+- Use `AN()` and `CHECK_OBJ_NOTNULL()` per Varnish idioms for all context pointer assertions
+- Add `$Restrict` directives to VCC for compile-time VCL method enforcement:
+  - `load()`, `set_fuel()`, `set_memory_limit()`: restricted to `vcl_init`
+  - `execute()`, `proxy_wasm_on_request()`: restricted to `client` scope
+
 ## [1.0.0] - 2026-04-29
 
 First stable release.
