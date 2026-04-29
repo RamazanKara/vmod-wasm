@@ -8,7 +8,9 @@ libvmod_wasm_la_SOURCES = \
 	wasm_engine.c \
 	wasm_engine.h \
 	host_functions.c \
-	host_functions.h
+	host_functions.h \
+	proxy_wasm.c \
+	proxy_wasm.h
 
 libvmod_wasm_la_LDFLAGS = \
 	-module \

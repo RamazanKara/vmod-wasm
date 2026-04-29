@@ -244,3 +244,163 @@ pub extern "C" fn compute_sum() -> i32 {
     }
     sum
 }
+
+// --- Phase 4: Proxy-Wasm ABI functions ---
+//
+// These implement a minimal Proxy-Wasm filter using the raw ABI
+// (no SDK). The filter reads User-Agent, blocks "BadBot" requests
+// with a 403 local response, and adds an X-Wasm-Filter header.
+
+// Proxy-Wasm host function imports (provided by vmod-wasm under "env")
+extern "C" {
+    fn proxy_log(level: i32, msg_data: i32, msg_size: i32) -> i32;
+
+    fn proxy_get_header_map_value(
+        map_type: i32,
+        key_data: i32,
+        key_size: i32,
+        return_value_data: i32,
+        return_value_size: i32,
+    ) -> i32;
+
+    fn proxy_add_header_map_value(
+        map_type: i32,
+        key_data: i32,
+        key_size: i32,
+        value_data: i32,
+        value_size: i32,
+    ) -> i32;
+
+    fn proxy_send_local_response(
+        status_code: i32,
+        status_code_details_data: i32,
+        status_code_details_size: i32,
+        body_data: i32,
+        body_size: i32,
+        headers_data: i32,
+        headers_size: i32,
+        grpc_status: i32,
+    ) -> i32;
+}
+
+// Simple bump allocator for proxy_on_memory_allocate
+static mut ALLOC_BUF: [u8; 65536] = [0u8; 65536];
+static mut ALLOC_OFFSET: usize = 0;
+
+/// Proxy-Wasm memory allocator — host calls this to allocate space
+/// in Wasm linear memory for returning strings.
+#[no_mangle]
+pub extern "C" fn proxy_on_memory_allocate(size: i32) -> i32 {
+    unsafe {
+        // Reset if we're running low on space
+        if ALLOC_OFFSET + (size as usize) > ALLOC_BUF.len() {
+            ALLOC_OFFSET = 0;
+        }
+        let ptr = ALLOC_BUF.as_mut_ptr().add(ALLOC_OFFSET) as i32;
+        ALLOC_OFFSET += size as usize;
+        ptr
+    }
+}
+
+/// Called when a new context is created.
+/// root_context_id > 0, parent == 0 means root context.
+/// stream_context_id > 0, parent > 0 means stream (per-request) context.
+#[no_mangle]
+pub extern "C" fn proxy_on_context_create(_context_id: i32, _parent_context_id: i32) {
+    // Nothing to do for this simple filter
+}
+
+/// Called once when the VM starts.
+#[no_mangle]
+pub extern "C" fn proxy_on_vm_start(_unused: i32, _vm_config_size: i32) -> i32 {
+    1 // true = success
+}
+
+/// Called once per plugin configuration.
+#[no_mangle]
+pub extern "C" fn proxy_on_configure(_plugin_context_id: i32, _config_size: i32) -> i32 {
+    1 // true = success
+}
+
+/// Helper: check if a byte slice contains a needle.
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    for i in 0..=(haystack.len() - needle.len()) {
+        if &haystack[i..i + needle.len()] == needle {
+            return true;
+        }
+    }
+    false
+}
+
+/// Called for each HTTP request. This is the main filter logic.
+///
+/// - Reads User-Agent header
+/// - If "BadBot" is found, sends 403 local response
+/// - Otherwise, adds X-Wasm-Filter: proxy-wasm header
+/// - Returns 0 (CONTINUE)
+#[no_mangle]
+pub extern "C" fn proxy_on_request_headers(_context_id: i32, _num_headers: i32, _end_of_stream: i32) -> i32 {
+    // Log that we're processing
+    let msg = b"proxy-wasm filter: processing request";
+    unsafe {
+        proxy_log(1, msg.as_ptr() as i32, msg.len() as i32);
+    }
+
+    // Read User-Agent header (map_type 0 = HTTP_REQUEST_HEADERS)
+    let key = b"User-Agent";
+    let mut return_data: i32 = 0;
+    let mut return_size: i32 = 0;
+
+    let status = unsafe {
+        proxy_get_header_map_value(
+            0, // HTTP_REQUEST_HEADERS
+            key.as_ptr() as i32,
+            key.len() as i32,
+            &mut return_data as *mut i32 as i32,
+            &mut return_size as *mut i32 as i32,
+        )
+    };
+
+    if status == 0 && return_size > 0 {
+        // Check if User-Agent contains "BadBot"
+        let ua_slice = unsafe {
+            core::slice::from_raw_parts(return_data as *const u8, return_size as usize)
+        };
+
+        if contains(ua_slice, b"BadBot") {
+            // Block with 403
+            let details = b"Forbidden";
+            let body = b"Blocked by Proxy-Wasm filter";
+            unsafe {
+                proxy_send_local_response(
+                    403,
+                    details.as_ptr() as i32,
+                    details.len() as i32,
+                    body.as_ptr() as i32,
+                    body.len() as i32,
+                    0, 0, // no extra headers
+                    -1,   // no grpc status
+                );
+            }
+            return 0; // CONTINUE — the host checks local_response_set
+        }
+    }
+
+    // Add X-Wasm-Filter header (map_type 0 = HTTP_REQUEST_HEADERS)
+    let hdr_name = b"X-Wasm-Filter";
+    let hdr_value = b"proxy-wasm";
+    unsafe {
+        proxy_add_header_map_value(
+            0, // HTTP_REQUEST_HEADERS
+            hdr_name.as_ptr() as i32,
+            hdr_name.len() as i32,
+            hdr_value.as_ptr() as i32,
+            hdr_value.len() as i32,
+        );
+    }
+
+    0 // CONTINUE
+}

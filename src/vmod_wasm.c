@@ -198,3 +198,39 @@ vmod_get_memory_limit(VRT_CTX)
 	AN(vwasm_engine_global);
 	return ((VCL_INT)vwasm_engine_get_memory_limit(vwasm_engine_global));
 }
+
+/*
+ * wasm.proxy_wasm_on_request(module) — Execute a Proxy-Wasm filter.
+ *
+ * Returns:
+ *   0    — CONTINUE (allow)
+ *   >0   — HTTP status code from send_local_response (e.g. 403)
+ *   -1   — execution error
+ */
+VCL_INT
+vmod_proxy_wasm_on_request(VRT_CTX, VCL_STRING module)
+{
+	int status_code = 0;
+	int ret;
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+	AN(vwasm_engine_global);
+
+	if (module == NULL || *module == '\0') {
+		VSLb(ctx->vsl, SLT_Error,
+		    "wasm.proxy_wasm_on_request(): module name required");
+		return (-1);
+	}
+
+	ret = vwasm_proxy_wasm_call(vwasm_engine_global, ctx,
+	    module, &status_code);
+	if (ret < 0)
+		return (-1);
+
+	/* If the filter called send_local_response, return the status code */
+	if (status_code > 0)
+		return (status_code);
+
+	/* Otherwise return the action (0=CONTINUE, 1=PAUSE) */
+	return (ret);
+}

@@ -1,0 +1,28 @@
+varnishtest "vmod-wasm: Proxy-Wasm basic filter — allow and add header"
+
+server s1 {
+    rxreq
+    expect req.http.X-Wasm-Filter == "proxy-wasm"
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("filter", "${wasm_module}");
+        wasm.set_fuel(10000000);
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result =
+            wasm.proxy_wasm_on_request("filter");
+    }
+} -start
+
+# Normal request should pass through with X-Wasm-Filter header added
+client c1 {
+    txreq -url "/test" -hdr "User-Agent: Mozilla/5.0"
+    rxresp
+    expect resp.status == 200
+} -run

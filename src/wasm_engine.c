@@ -21,6 +21,7 @@
 
 #include "wasm_engine.h"
 #include "host_functions.h"
+#include "proxy_wasm.h"
 
 #define MAX_MODULES 64
 
@@ -77,6 +78,13 @@ vwasm_engine_new(void)
 	}
 
 	if (vwasm_host_define_imports(e->linker) != 0) {
+		wasmtime_linker_delete(e->linker);
+		wasm_engine_delete(e->engine);
+		free(e);
+		return (NULL);
+	}
+
+	if (vwasm_proxy_wasm_define_imports(e->linker) != 0) {
 		wasmtime_linker_delete(e->linker);
 		wasm_engine_delete(e->engine);
 		free(e);
@@ -401,6 +409,248 @@ vwasm_engine_call(struct vwasm_engine *engine,
 		    (unsigned long long)(fuel_limit - fuel_remaining),
 		    (unsigned long long)fuel_limit);
 	}
+
+cleanup:
+	if (error != NULL)
+		wasmtime_error_delete(error);
+	if (trap != NULL)
+		wasm_trap_delete(trap);
+	wasmtime_store_delete(store);
+	return (ret);
+}
+
+/* ----------------------------------------------------------------
+ * Call a Wasm function with i32 arguments and i32 result.
+ * Helper for Proxy-Wasm lifecycle callbacks.
+ * ---------------------------------------------------------------- */
+
+static int
+call_wasm_func(wasmtime_context_t *context, wasmtime_instance_t *instance,
+    const char *func_name, const wasmtime_val_t *args, size_t nargs,
+    int32_t *result)
+{
+	wasmtime_extern_t item;
+	wasmtime_val_t results[1];
+	wasmtime_error_t *error;
+	wasm_trap_t *trap = NULL;
+
+	if (!wasmtime_instance_export_get(context, instance,
+	    func_name, strlen(func_name), &item))
+		return (-1);
+
+	if (item.kind != WASMTIME_EXTERN_FUNC)
+		return (-1);
+
+	error = wasmtime_func_call(context, &item.of.func,
+	    args, nargs, results, 1, &trap);
+	if (error != NULL) {
+		wasmtime_error_delete(error);
+		return (-1);
+	}
+	if (trap != NULL) {
+		wasm_trap_delete(trap);
+		return (-1);
+	}
+
+	if (result != NULL)
+		*result = results[0].of.i32;
+	return (0);
+}
+
+static int
+call_wasm_void(wasmtime_context_t *context, wasmtime_instance_t *instance,
+    const char *func_name, const wasmtime_val_t *args, size_t nargs)
+{
+	wasmtime_extern_t item;
+	wasmtime_error_t *error;
+	wasm_trap_t *trap = NULL;
+
+	if (!wasmtime_instance_export_get(context, instance,
+	    func_name, strlen(func_name), &item))
+		return (-1);
+
+	if (item.kind != WASMTIME_EXTERN_FUNC)
+		return (-1);
+
+	error = wasmtime_func_call(context, &item.of.func,
+	    args, nargs, NULL, 0, &trap);
+	if (error != NULL) {
+		wasmtime_error_delete(error);
+		return (-1);
+	}
+	if (trap != NULL) {
+		wasm_trap_delete(trap);
+		return (-1);
+	}
+	return (0);
+}
+
+/* ----------------------------------------------------------------
+ * Proxy-Wasm lifecycle execution for HTTP request filtering.
+ *
+ * Runs the Proxy-Wasm callback sequence and returns the action
+ * from proxy_on_request_headers, or -1 on error.
+ * ---------------------------------------------------------------- */
+
+int
+vwasm_proxy_wasm_call(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char *module_name,
+    int *status_code)
+{
+	wasmtime_module_t *module;
+	wasmtime_store_t *store;
+	wasmtime_context_t *context;
+	wasmtime_instance_t instance;
+	wasmtime_error_t *error = NULL;
+	wasm_trap_t *trap = NULL;
+	wasmtime_extern_t item;
+	struct vwasm_proxy_ctx proxy_ctx;
+	wasmtime_val_t args[3];
+	int32_t action;
+	uint64_t fuel_limit;
+	size_t mem_limit;
+	int ret = -1;
+	int num_headers;
+
+	if (engine == NULL || module_name == NULL || status_code == NULL)
+		return (-1);
+
+	*status_code = 0;
+
+	/* Read current limits */
+	pthread_rwlock_rdlock(&engine->rwlock);
+	fuel_limit = engine->fuel_limit;
+	mem_limit = engine->memory_limit;
+	pthread_rwlock_unlock(&engine->rwlock);
+
+	/* Find the pre-compiled module */
+	pthread_rwlock_rdlock(&engine->rwlock);
+	module = find_module(engine, module_name);
+	pthread_rwlock_unlock(&engine->rwlock);
+
+	if (module == NULL)
+		return (-1);
+
+	/* Set up proxy-wasm context */
+	memset(&proxy_ctx, 0, sizeof(proxy_ctx));
+	proxy_ctx.vrt_ctx = ctx;
+	proxy_ctx.memory_valid = 0;
+	proxy_ctx.allocator_valid = 0;
+	proxy_ctx.root_context_id = 1;
+	proxy_ctx.stream_context_id = 2;
+	proxy_ctx.local_response_set = 0;
+	proxy_ctx.local_response_code = 0;
+
+	/* Create a per-call store with proxy context as data */
+	store = wasmtime_store_new(engine->engine, &proxy_ctx, NULL);
+	if (store == NULL)
+		return (-1);
+
+	context = wasmtime_store_context(store);
+	proxy_ctx.wasm_ctx = context;
+
+	/* Set execution limits */
+	wasmtime_context_set_fuel(context, fuel_limit);
+	wasmtime_store_limiter(store, (int64_t)mem_limit, -1, -1, -1, -1);
+
+	/* Instantiate the module via linker */
+	error = wasmtime_linker_instantiate(engine->linker, context,
+	    module, &instance, &trap);
+	if (error != NULL) {
+		log_error(ctx, error, module_name, "instantiate");
+		goto cleanup;
+	}
+	if (trap != NULL) {
+		log_trap(ctx, trap, module_name, "instantiate");
+		goto cleanup;
+	}
+
+	/* Resolve "memory" export */
+	if (wasmtime_instance_export_get(context, &instance,
+	    "memory", 6, &item) && item.kind == WASMTIME_EXTERN_MEMORY) {
+		proxy_ctx.memory = item.of.memory;
+		proxy_ctx.memory_valid = 1;
+	}
+
+	/* Resolve "proxy_on_memory_allocate" export (for returning strings) */
+	if (wasmtime_instance_export_get(context, &instance,
+	    "proxy_on_memory_allocate", 24, &item) &&
+	    item.kind == WASMTIME_EXTERN_FUNC) {
+		proxy_ctx.allocator = item.of.func;
+		proxy_ctx.allocator_valid = 1;
+	}
+
+	/*
+	 * Proxy-Wasm lifecycle sequence:
+	 *
+	 * 1. proxy_on_context_create(root_id=1, parent_id=0)
+	 * 2. proxy_on_vm_start(0, vm_config_size=0)
+	 * 3. proxy_on_configure(root_id=1, plugin_config_size=0)
+	 * 4. proxy_on_context_create(stream_id=2, root_id=1)
+	 * 5. proxy_on_request_headers(stream_id=2, num_headers, end_of_stream=1)
+	 */
+
+	/* 1. Create root context */
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
+	args[1].kind = WASMTIME_I32;
+	args[1].of.i32 = 0; /* no parent */
+	call_wasm_void(context, &instance,
+	    "proxy_on_context_create", args, 2);
+
+	/* 2. VM start (unused=0, vm_config_size=0) */
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = 0;
+	args[1].kind = WASMTIME_I32;
+	args[1].of.i32 = 0;
+	call_wasm_func(context, &instance,
+	    "proxy_on_vm_start", args, 2, NULL);
+
+	/* 3. Configure root context */
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
+	args[1].kind = WASMTIME_I32;
+	args[1].of.i32 = 0; /* no plugin config */
+	call_wasm_func(context, &instance,
+	    "proxy_on_configure", args, 2, NULL);
+
+	/* 4. Create stream context */
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
+	args[1].kind = WASMTIME_I32;
+	args[1].of.i32 = (int32_t)proxy_ctx.root_context_id;
+	call_wasm_void(context, &instance,
+	    "proxy_on_context_create", args, 2);
+
+	/* 5. Call on_request_headers */
+	num_headers = 0;
+	if (ctx->http_req != NULL)
+		num_headers = ctx->http_req->nhd - HTTP_HDR_FIRST;
+
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
+	args[1].kind = WASMTIME_I32;
+	args[1].of.i32 = num_headers;
+	args[2].kind = WASMTIME_I32;
+	args[2].of.i32 = 1; /* end_of_stream = true */
+
+	action = 0;
+	if (call_wasm_func(context, &instance,
+	    "proxy_on_request_headers", args, 3, &action) != 0) {
+		log_error(ctx, NULL, module_name, "proxy_on_request_headers");
+		goto cleanup;
+	}
+
+	/* Check if module called send_local_response */
+	if (proxy_ctx.local_response_set) {
+		*status_code = proxy_ctx.local_response_code;
+		ret = 0;
+		goto cleanup;
+	}
+
+	*status_code = 0;
+	ret = (int)action;
 
 cleanup:
 	if (error != NULL)

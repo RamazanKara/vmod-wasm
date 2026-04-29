@@ -1,0 +1,42 @@
+varnishtest "vmod-wasm: Proxy-Wasm filter blocks BadBot with 403"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "Allowed"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("filter", "${wasm_module}");
+        wasm.set_fuel(10000000);
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result =
+            wasm.proxy_wasm_on_request("filter");
+        if (req.http.X-Wasm-Result != "0") {
+            return (synth(403, "Blocked by Proxy-Wasm"));
+        }
+    }
+
+    sub vcl_synth {
+        set resp.http.X-Blocked = "true";
+    }
+} -start
+
+# BadBot should be blocked with 403
+client c1 {
+    txreq -url "/" -hdr "User-Agent: EvilBadBot/1.0"
+    rxresp
+    expect resp.status == 403
+    expect resp.http.X-Blocked == "true"
+} -run
+
+# Normal user should pass through
+client c2 {
+    txreq -url "/" -hdr "User-Agent: Chrome/120"
+    rxresp
+    expect resp.status == 200
+} -run

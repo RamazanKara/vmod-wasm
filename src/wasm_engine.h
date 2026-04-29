@@ -40,4 +40,22 @@ void vwasm_engine_set_memory_limit(struct vwasm_engine *engine, size_t bytes);
 uint64_t vwasm_engine_get_fuel(struct vwasm_engine *engine);
 size_t vwasm_engine_get_memory_limit(struct vwasm_engine *engine);
 
+/*
+ * Execute a Proxy-Wasm module lifecycle for HTTP request filtering.
+ *
+ * Runs the full Proxy-Wasm lifecycle:
+ *   1. proxy_on_context_create(1, 0)    — root context
+ *   2. proxy_on_vm_start(0, 0)          — VM startup
+ *   3. proxy_on_configure(1, 0)         — plugin configuration
+ *   4. proxy_on_context_create(2, 1)    — stream context
+ *   5. proxy_on_request_headers(2, n, 1) — HTTP request filtering
+ *
+ * Returns: action code (0=CONTINUE, 1=PAUSE), or -1 on error.
+ * If the module called send_local_response, *status_code is set.
+ */
+int vwasm_proxy_wasm_call(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char *module_name,
+    int *status_code);
+
 #endif /* VWASM_ENGINE_H */

@@ -91,3 +91,26 @@ Return the current fuel limit.
 $Function INT get_memory_limit()
 
 Return the current memory limit in bytes.
+
+$Function INT proxy_wasm_on_request(STRING module)
+
+Execute a Proxy-Wasm filter module for the current HTTP request.
+
+Runs the full Proxy-Wasm lifecycle (context create, vm_start,
+configure, request_headers) and returns:
+  - 0: CONTINUE (allow the request)
+  - >0: HTTP status code from send_local_response (e.g. 403)
+  - -1: execution error
+
+The module must export Proxy-Wasm ABI functions:
+  proxy_on_context_create, proxy_on_vm_start, proxy_on_configure,
+  proxy_on_request_headers, proxy_on_memory_allocate, memory.
+
+Example::
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request("filter");
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(403, "Blocked"));
+        }
+    }
