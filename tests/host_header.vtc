@@ -1,0 +1,32 @@
+varnishtest "vmod-wasm: echo User-Agent header via host function"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        # echo_user_agent reads User-Agent and sets X-Wasm-UA
+        wasm.execute("test", "echo_user_agent");
+    }
+
+    sub vcl_deliver {
+        if (req.http.X-Wasm-UA) {
+            set resp.http.X-Wasm-UA = req.http.X-Wasm-UA;
+        }
+    }
+} -start
+
+client c1 {
+    txreq -url "/" -hdr "User-Agent: TestBrowser/1.0"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-UA == "TestBrowser/1.0"
+} -run

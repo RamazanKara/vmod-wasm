@@ -1,0 +1,39 @@
+varnishtest "vmod-wasm: block BadBot user agent via host function"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "Allowed"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        if (wasm.execute("test", "block_bad_bot") == 403) {
+            return (synth(403, "Blocked by Wasm WAF"));
+        }
+    }
+
+    sub vcl_synth {
+        set resp.http.X-Wasm-Blocked = "true";
+    }
+} -start
+
+# BadBot should be blocked
+client c1 {
+    txreq -url "/" -hdr "User-Agent: BadBot/2.0"
+    rxresp
+    expect resp.status == 403
+    expect resp.http.X-Wasm-Blocked == "true"
+} -run
+
+# Normal browser should be allowed
+client c2 {
+    txreq -url "/" -hdr "User-Agent: Mozilla/5.0"
+    rxresp
+    expect resp.status == 200
+} -run

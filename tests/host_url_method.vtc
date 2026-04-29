@@ -1,0 +1,39 @@
+varnishtest "vmod-wasm: echo URL, method via host functions"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        # echo_url reads the URL via host function and sets X-Wasm-URL header
+        wasm.execute("test", "echo_url");
+        # echo_method reads the method and sets X-Wasm-Method header
+        wasm.execute("test", "echo_method");
+    }
+
+    sub vcl_deliver {
+        # The Wasm module sets these on req via set_response_header host function
+        if (req.http.X-Wasm-URL) {
+            set resp.http.X-Wasm-URL = req.http.X-Wasm-URL;
+        }
+        if (req.http.X-Wasm-Method) {
+            set resp.http.X-Wasm-Method = req.http.X-Wasm-Method;
+        }
+    }
+} -start
+
+client c1 {
+    txreq -url "/test/path?q=1" -hdr "Host: example.com"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-URL == "/test/path?q=1"
+    expect resp.http.X-Wasm-Method == "GET"
+} -run

@@ -6,7 +6,9 @@ vmod_LTLIBRARIES = libvmod_wasm.la
 libvmod_wasm_la_SOURCES = \
 	vmod_wasm.c \
 	wasm_engine.c \
-	wasm_engine.h
+	wasm_engine.h \
+	host_functions.c \
+	host_functions.h
 
 libvmod_wasm_la_LDFLAGS = \
 	-module \

@@ -17,6 +17,7 @@
 #include <wasmtime.h>
 
 #include "wasm_engine.h"
+#include "host_functions.h"
 
 #define MAX_MODULES 64
 
@@ -27,6 +28,7 @@ struct wasm_module_entry {
 
 struct vwasm_engine {
 	wasm_engine_t		*engine;
+	wasmtime_linker_t	*linker;
 	struct wasm_module_entry	modules[MAX_MODULES];
 	int			nmodules;
 	pthread_rwlock_t	rwlock;
@@ -57,6 +59,21 @@ vwasm_engine_new(void)
 		return (NULL);
 	}
 
+	/* Create linker and register host functions */
+	e->linker = wasmtime_linker_new(e->engine);
+	if (e->linker == NULL) {
+		wasm_engine_delete(e->engine);
+		free(e);
+		return (NULL);
+	}
+
+	if (vwasm_host_define_imports(e->linker) != 0) {
+		wasmtime_linker_delete(e->linker);
+		wasm_engine_delete(e->engine);
+		free(e);
+		return (NULL);
+	}
+
 	pthread_rwlock_init(&e->rwlock, NULL);
 	e->nmodules = 0;
 
@@ -80,6 +97,7 @@ vwasm_engine_destroy(struct vwasm_engine **enginep)
 		wasmtime_module_delete(e->modules[i].module);
 	}
 
+	wasmtime_linker_delete(e->linker);
 	wasm_engine_delete(e->engine);
 	pthread_rwlock_destroy(&e->rwlock);
 	free(e);
@@ -178,9 +196,8 @@ vwasm_engine_call(struct vwasm_engine *engine,
 	wasm_trap_t *trap = NULL;
 	wasmtime_extern_t item;
 	wasmtime_val_t results[1];
+	struct vwasm_host_ctx host_ctx;
 	int ret = -1;
-
-	(void)ctx; /* Will be used for host functions in Phase 2 */
 
 	if (engine == NULL || module_name == NULL || func_name == NULL)
 		return (-1);
@@ -193,8 +210,13 @@ vwasm_engine_call(struct vwasm_engine *engine,
 	if (module == NULL)
 		return (-1);
 
-	/* Create a per-call store (cheap — no compilation happens here) */
-	store = wasmtime_store_new(engine->engine, NULL, NULL);
+	/* Set up host context with Varnish request context */
+	memset(&host_ctx, 0, sizeof(host_ctx));
+	host_ctx.vrt_ctx = ctx;
+	host_ctx.memory_valid = 0;
+
+	/* Create a per-call store with host context as data */
+	store = wasmtime_store_new(engine->engine, &host_ctx, NULL);
 	if (store == NULL)
 		return (-1);
 
@@ -203,10 +225,18 @@ vwasm_engine_call(struct vwasm_engine *engine,
 	/* Set fuel limit for this execution */
 	wasmtime_context_set_fuel(context, 100000);
 
-	/* Instantiate the module (no imports for Phase 1) */
-	error = wasmtime_instance_new(context, module, NULL, 0, &instance, &trap);
+	/* Instantiate the module via linker (resolves host function imports) */
+	error = wasmtime_linker_instantiate(engine->linker, context,
+	    module, &instance, &trap);
 	if (error != NULL || trap != NULL)
 		goto cleanup;
+
+	/* Resolve the "memory" export for host function string passing */
+	if (wasmtime_instance_export_get(context, &instance,
+	    "memory", 6, &item) && item.kind == WASMTIME_EXTERN_MEMORY) {
+		host_ctx.memory = item.of.memory;
+		host_ctx.memory_valid = 1;
+	}
 
 	/* Look up the exported function */
 	if (!wasmtime_instance_export_get(context, &instance,
