@@ -1,0 +1,52 @@
+$Module wasm 3 "Wasm VMOD"
+
+$Synopsis Execute WebAssembly modules during Varnish request processing
+
+$Event vmod_event
+
+DESCRIPTION
+===========
+
+This VMOD embeds a WebAssembly runtime (Wasmtime) into Varnish,
+allowing you to load and execute Wasm modules for request/response
+processing.
+
+$Function VOID load(STRING name, STRING path)
+
+Load a Wasm module from disk. The module is compiled once at VCL
+init time and can be instantiated cheaply per-request.
+
+Arguments:
+    name: A unique identifier for this module (used in execute calls)
+    path: Absolute path to the .wasm file
+
+Example::
+
+    sub vcl_init {
+        wasm.load("my_filter", "/etc/varnish/wasm/filter.wasm");
+    }
+
+$Function INT execute(STRING name, STRING function)
+
+Execute an exported function from a loaded Wasm module.
+Returns the integer result of the Wasm function.
+
+Arguments:
+    name: The module identifier (as passed to load())
+    function: The exported function name to call
+
+Example::
+
+    sub vcl_recv {
+        if (wasm.execute("my_filter", "on_request") == 403) {
+            return (synth(403, "Blocked by Wasm filter"));
+        }
+    }
+
+$Function STRING version()
+
+Return the vmod-wasm version string.
+
+Example::
+
+    std.log("vmod-wasm version: " + wasm.version());

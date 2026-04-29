@@ -1,0 +1,46 @@
+# Build artifacts
+*.o
+*.lo
+*.la
+*.so
+*.dylib
+.libs/
+.deps/
+
+# Autotools generated
+/aclocal.m4
+/autom4te.cache/
+/config.guess
+/config.h
+/config.h.in
+/config.h.in~
+/config.log
+/config.status
+/config.sub
+/configure
+/depcomp
+/install-sh
+/libtool
+/ltmain.sh
+/m4/
+/missing
+/stamp-h1
+Makefile
+Makefile.in
+
+# VMOD generated
+src/vcc_wasm_if.c
+src/vcc_wasm_if.h
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Rust build (test modules)
+examples/rust/target/
+
+# OS
+.DS_Store
+Thumbs.db

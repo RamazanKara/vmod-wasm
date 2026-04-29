@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        varnish-version: ['7.5']
+        wasmtime-version: ['25.0.0']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test in Docker
+        run: |
+          docker build \
+            --build-arg VARNISH_VERSION=${{ matrix.varnish-version }} \
+            --build-arg WASMTIME_VERSION=${{ matrix.wasmtime-version }} \
+            -t vmod-wasm-test .
+          docker run --rm vmod-wasm-test make check
