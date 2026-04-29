@@ -1,0 +1,32 @@
+varnishtest "vmod-wasm: block/allow decision based on Wasm return value"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "Allowed"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        # on_request_block returns 403
+        if (wasm.execute("test", "on_request_block") == 403) {
+            return (synth(403, "Blocked by Wasm"));
+        }
+    }
+
+    sub vcl_synth {
+        set resp.http.X-Wasm-Blocked = "true";
+    }
+} -start
+
+client c1 {
+    txreq -url "/"
+    rxresp
+    expect resp.status == 403
+    expect resp.http.X-Wasm-Blocked == "true"
+} -run

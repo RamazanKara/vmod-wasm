@@ -29,13 +29,13 @@
 #include "cache/cache.h"
 #include "vcl.h"
 
-#include "vcc_wasm_if.h"
+#include "vcc_if.h"
 #include "wasm_engine.h"
 
 #define VMOD_WASM_VERSION "0.1.0"
 
 /* Global Wasm engine — shared across all VCL instances and threads */
-static struct wasm_engine *wasm_engine_global = NULL;
+static struct vwasm_engine *vwasm_engine_global = NULL;
 static pthread_mutex_t engine_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /*
@@ -44,25 +44,25 @@ static pthread_mutex_t engine_mtx = PTHREAD_MUTEX_INITIALIZER;
  * DISCARD: destroy the Wasm engine
  */
 int v_matchproto_(vmod_event_f)
-vmod_event(VRT_CTX, struct vmod_priv *priv, enum vcl_event_e e)
+vmod_vmod_event(VRT_CTX, struct vmod_priv *priv, enum vcl_event_e e)
 {
 	(void)priv;
 
 	switch (e) {
 	case VCL_EVENT_LOAD:
 		AZ(pthread_mutex_lock(&engine_mtx));
-		if (wasm_engine_global == NULL)
-			wasm_engine_global = wasm_engine_new();
+		if (vwasm_engine_global == NULL)
+			vwasm_engine_global = vwasm_engine_new();
 		AZ(pthread_mutex_unlock(&engine_mtx));
-		if (wasm_engine_global == NULL)
+		if (vwasm_engine_global == NULL)
 			return (-1);
 		return (0);
 
 	case VCL_EVENT_DISCARD:
 		AZ(pthread_mutex_lock(&engine_mtx));
-		if (wasm_engine_global != NULL) {
-			wasm_engine_destroy(&wasm_engine_global);
-			wasm_engine_global = NULL;
+		if (vwasm_engine_global != NULL) {
+			vwasm_engine_destroy(&vwasm_engine_global);
+			vwasm_engine_global = NULL;
 		}
 		AZ(pthread_mutex_unlock(&engine_mtx));
 		return (0);
@@ -90,9 +90,9 @@ vmod_load(VRT_CTX, VCL_STRING name, VCL_STRING path)
 		return;
 	}
 
-	AN(wasm_engine_global);
+	AN(vwasm_engine_global);
 
-	if (wasm_engine_load_module(wasm_engine_global, name, path) != 0) {
+	if (vwasm_engine_load_module(vwasm_engine_global, name, path) != 0) {
 		VRT_fail(ctx, "wasm.load(): failed to load module '%s' from '%s'",
 		    name, path);
 	}
@@ -116,10 +116,10 @@ vmod_execute(VRT_CTX, VCL_STRING name, VCL_STRING function)
 		return (-1);
 	}
 
-	AN(wasm_engine_global);
+	AN(vwasm_engine_global);
 
 	int result = 0;
-	if (wasm_engine_call(wasm_engine_global, ctx, name, function, &result) != 0) {
+	if (vwasm_engine_call(vwasm_engine_global, ctx, name, function, &result) != 0) {
 		VSLb(ctx->vsl, SLT_Error,
 		    "wasm.execute(): failed to call '%s' in module '%s'",
 		    function, name);

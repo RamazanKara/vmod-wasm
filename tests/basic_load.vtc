@@ -1,0 +1,36 @@
+varnishtest "vmod-wasm: basic load and execute"
+
+# This test verifies:
+# 1. Loading a Wasm module from disk
+# 2. Calling exported functions and getting correct return values
+# 3. Using return values for request decisions
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result = wasm.execute("test", "get_constant");
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+        set resp.http.X-Wasm-Version = wasm.version();
+    }
+} -start
+
+client c1 {
+    txreq -url "/"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "42"
+    expect resp.http.X-Wasm-Version == "0.1.0"
+} -run

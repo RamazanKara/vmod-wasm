@@ -25,17 +25,17 @@ struct wasm_module_entry {
 	wasmtime_module_t	*module;
 };
 
-struct wasm_engine {
+struct vwasm_engine {
 	wasm_engine_t		*engine;
 	struct wasm_module_entry	modules[MAX_MODULES];
 	int			nmodules;
 	pthread_rwlock_t	rwlock;
 };
 
-struct wasm_engine *
-wasm_engine_new(void)
+struct vwasm_engine *
+vwasm_engine_new(void)
 {
-	struct wasm_engine *e;
+	struct vwasm_engine *e;
 	wasm_config_t *config;
 
 	e = calloc(1, sizeof(*e));
@@ -64,9 +64,9 @@ wasm_engine_new(void)
 }
 
 void
-wasm_engine_destroy(struct wasm_engine **enginep)
+vwasm_engine_destroy(struct vwasm_engine **enginep)
 {
-	struct wasm_engine *e;
+	struct vwasm_engine *e;
 	int i;
 
 	if (enginep == NULL || *enginep == NULL)
@@ -86,7 +86,7 @@ wasm_engine_destroy(struct wasm_engine **enginep)
 }
 
 int
-wasm_engine_load_module(struct wasm_engine *engine,
+vwasm_engine_load_module(struct vwasm_engine *engine,
     const char *name, const char *path)
 {
 	FILE *fp;
@@ -153,7 +153,7 @@ wasm_engine_load_module(struct wasm_engine *engine,
 }
 
 static wasmtime_module_t *
-find_module(struct wasm_engine *engine, const char *name)
+find_module(struct vwasm_engine *engine, const char *name)
 {
 	int i;
 
@@ -165,7 +165,7 @@ find_module(struct wasm_engine *engine, const char *name)
 }
 
 int
-wasm_engine_call(struct wasm_engine *engine,
+vwasm_engine_call(struct vwasm_engine *engine,
     const struct vrt_ctx *ctx,
     const char *module_name, const char *func_name,
     int *result)

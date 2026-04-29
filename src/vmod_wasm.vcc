@@ -1,6 +1,6 @@
 $Module wasm 3 "Wasm VMOD"
 
-$Synopsis Execute WebAssembly modules during Varnish request processing
+$Synopsis manual
 
 $Event vmod_event
 

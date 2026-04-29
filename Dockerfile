@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     gnupg \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Varnish from official repo
@@ -33,11 +34,25 @@ RUN ARCH=$(dpkg --print-architecture) \
     && ln -s /opt/wasmtime-v${WASMTIME_VERSION}-${WASMTIME_ARCH}-linux-c-api /opt/wasmtime
 
 ENV WASMTIME_DIR=/opt/wasmtime
+ENV LD_LIBRARY_PATH=/opt/wasmtime/lib
+
+# Install Rust (for building test Wasm modules)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
+    && . "$HOME/.cargo/env" \
+    && rustup target add wasm32-unknown-unknown
+
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /src
 
 COPY . .
 
+# Build the test Wasm module
+RUN cd examples/rust && cargo build --release \
+    && mkdir -p /src/tests/wasm \
+    && cp target/wasm32-unknown-unknown/release/test_module.wasm /src/tests/wasm/
+
+# Build the VMOD
 RUN chmod +x autogen.sh \
     && ./autogen.sh \
     && ./configure --with-wasmtime=${WASMTIME_DIR} \

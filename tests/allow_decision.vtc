@@ -1,0 +1,28 @@
+varnishtest "vmod-wasm: allow decision passes through to backend"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "Allowed through"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        # on_request_allow returns 0 — should NOT block
+        if (wasm.execute("test", "on_request_allow") == 403) {
+            return (synth(403, "Blocked by Wasm"));
+        }
+    }
+} -start
+
+client c1 {
+    txreq -url "/"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "Allowed through"
+} -run

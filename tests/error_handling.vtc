@@ -1,0 +1,29 @@
+varnishtest "vmod-wasm: error handling for missing module and function"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        # Call a function that does not exist — should return -1
+        set req.http.X-Wasm-Result = wasm.execute("test", "nonexistent_function");
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+    }
+} -start
+
+client c1 {
+    txreq -url "/"
+    rxresp
+    expect resp.http.X-Wasm-Result == "-1"
+} -run

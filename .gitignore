@@ -29,8 +29,8 @@ Makefile
 Makefile.in
 
 # VMOD generated
-src/vcc_wasm_if.c
-src/vcc_wasm_if.h
+src/vcc_if.c
+src/vcc_if.h
 
 # IDE
 .vscode/
