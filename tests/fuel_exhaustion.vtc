@@ -1,0 +1,48 @@
+varnishtest "vmod-wasm: fuel exhaustion stops runaway modules"
+
+# This test verifies:
+# 1. An infinite loop Wasm function is stopped by fuel exhaustion
+# 2. The request completes with an error (fail-open) instead of hanging
+# 3. Normal execution still works after a fuel trap
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+        # Use a small fuel limit to ensure the infinite loop runs out quickly
+        wasm.set_fuel(10000);
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result = wasm.execute("test", req.http.X-Wasm-Func);
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+    }
+} -start
+
+# Test 1: infinite_loop should be stopped by fuel exhaustion, returning -1
+client c1 {
+    txreq -url "/" -hdr "X-Wasm-Func: infinite_loop"
+    rxresp
+    expect resp.status == 200
+    # execute() returns -1 when the Wasm call fails (trap)
+    expect resp.http.X-Wasm-Result == "-1"
+} -run
+
+# Test 2: normal function still works after a trapped execution
+client c2 {
+    txreq -url "/" -hdr "X-Wasm-Func: get_constant"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "42"
+} -run

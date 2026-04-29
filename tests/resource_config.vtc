@@ -1,0 +1,42 @@
+varnishtest "vmod-wasm: resource configuration and metrics"
+
+# This test verifies:
+# 1. set_fuel() and set_memory_limit() can be configured
+# 2. get_fuel() and get_memory_limit() return correct values
+# 3. Normal execution completes and uses fuel
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+        wasm.set_fuel(500000);
+        wasm.set_memory_limit(8388608);
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result = wasm.execute("test", "compute_sum");
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+        set resp.http.X-Fuel = wasm.get_fuel();
+        set resp.http.X-MemLimit = wasm.get_memory_limit();
+    }
+} -start
+
+client c1 {
+    txreq -url "/"
+    rxresp
+    expect resp.status == 200
+    # compute_sum returns sum of 0..999 = 499500
+    expect resp.http.X-Wasm-Result == "499500"
+    # Verify configured limits are returned
+    expect resp.http.X-Fuel == "500000"
+    expect resp.http.X-MemLimit == "8388608"
+} -run

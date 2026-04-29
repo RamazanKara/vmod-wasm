@@ -16,6 +16,9 @@
 #include <wasm.h>
 #include <wasmtime.h>
 
+#include "cache/cache.h"
+#include "vcl.h"
+
 #include "wasm_engine.h"
 #include "host_functions.h"
 
@@ -32,6 +35,9 @@ struct vwasm_engine {
 	struct wasm_module_entry	modules[MAX_MODULES];
 	int			nmodules;
 	pthread_rwlock_t	rwlock;
+	/* Execution limits (atomic access via rwlock) */
+	uint64_t		fuel_limit;
+	size_t			memory_limit;
 };
 
 struct vwasm_engine *
@@ -52,6 +58,9 @@ vwasm_engine_new(void)
 
 	/* Enable fuel consumption for execution limits */
 	wasmtime_config_consume_fuel_set(config, true);
+
+	/* Set maximum Wasm call stack size */
+	wasmtime_config_max_wasm_stack_set(config, VWASM_DEFAULT_STACKSIZE);
 
 	e->engine = wasm_engine_new_with_config(config);
 	if (e->engine == NULL) {
@@ -76,6 +85,8 @@ vwasm_engine_new(void)
 
 	pthread_rwlock_init(&e->rwlock, NULL);
 	e->nmodules = 0;
+	e->fuel_limit = VWASM_DEFAULT_FUEL;
+	e->memory_limit = VWASM_DEFAULT_MEMLIMIT;
 
 	return (e);
 }
@@ -101,6 +112,108 @@ vwasm_engine_destroy(struct vwasm_engine **enginep)
 	wasm_engine_delete(e->engine);
 	pthread_rwlock_destroy(&e->rwlock);
 	free(e);
+}
+
+/* ----------------------------------------------------------------
+ * Configuration setters/getters (thread-safe via rwlock)
+ * ---------------------------------------------------------------- */
+
+void
+vwasm_engine_set_fuel(struct vwasm_engine *engine, uint64_t fuel)
+{
+	if (engine == NULL)
+		return;
+	pthread_rwlock_wrlock(&engine->rwlock);
+	engine->fuel_limit = fuel;
+	pthread_rwlock_unlock(&engine->rwlock);
+}
+
+void
+vwasm_engine_set_memory_limit(struct vwasm_engine *engine, size_t bytes)
+{
+	if (engine == NULL)
+		return;
+	pthread_rwlock_wrlock(&engine->rwlock);
+	engine->memory_limit = bytes;
+	pthread_rwlock_unlock(&engine->rwlock);
+}
+
+uint64_t
+vwasm_engine_get_fuel(struct vwasm_engine *engine)
+{
+	uint64_t f;
+
+	if (engine == NULL)
+		return (VWASM_DEFAULT_FUEL);
+	pthread_rwlock_rdlock(&engine->rwlock);
+	f = engine->fuel_limit;
+	pthread_rwlock_unlock(&engine->rwlock);
+	return (f);
+}
+
+size_t
+vwasm_engine_get_memory_limit(struct vwasm_engine *engine)
+{
+	size_t m;
+
+	if (engine == NULL)
+		return (VWASM_DEFAULT_MEMLIMIT);
+	pthread_rwlock_rdlock(&engine->rwlock);
+	m = engine->memory_limit;
+	pthread_rwlock_unlock(&engine->rwlock);
+	return (m);
+}
+
+/* ----------------------------------------------------------------
+ * Store memory limiter callback — called when Wasm linear memory
+ * tries to grow beyond the configured limit.
+ *
+ * We use wasmtime_store_limiter() in vwasm_engine_call() instead
+ * of a manual callback — it takes memory_size directly.
+ * ---------------------------------------------------------------- */
+
+/* Extract human-readable message from a Wasmtime trap */
+static void
+log_trap(const struct vrt_ctx *ctx, wasm_trap_t *trap,
+    const char *module_name, const char *func_name)
+{
+	wasm_message_t msg;
+
+	if (ctx == NULL || ctx->vsl == NULL || trap == NULL)
+		return;
+
+	wasm_trap_message(trap, &msg);
+	if (msg.size > 0 && msg.data != NULL)
+		VSLb(ctx->vsl, SLT_Error,
+		    "wasm: trap in %s.%s: %.*s",
+		    module_name, func_name, (int)msg.size, msg.data);
+	else
+		VSLb(ctx->vsl, SLT_Error,
+		    "wasm: trap in %s.%s (no message)",
+		    module_name, func_name);
+	wasm_byte_vec_delete(&msg);
+}
+
+/* Extract human-readable message from a Wasmtime error */
+static void
+log_error(const struct vrt_ctx *ctx, wasmtime_error_t *error,
+    const char *module_name, const char *func_name)
+{
+	wasm_message_t msg;
+
+	if (ctx == NULL || ctx->vsl == NULL || error == NULL)
+		return;
+
+	wasmtime_error_message(error, &msg);
+	if (msg.size > 0 && msg.data != NULL)
+		VSLb(ctx->vsl, SLT_Error,
+		    "wasm: error in %s.%s: %.*s",
+		    module_name, func_name, (int)msg.size, msg.data);
+	else
+		VSLb(ctx->vsl, SLT_Error,
+		    "wasm: error in %s.%s (no message)",
+		    module_name, func_name);
+	wasm_byte_vec_delete(&msg);
 }
 
 int
@@ -197,10 +310,18 @@ vwasm_engine_call(struct vwasm_engine *engine,
 	wasmtime_extern_t item;
 	wasmtime_val_t results[1];
 	struct vwasm_host_ctx host_ctx;
+	uint64_t fuel_limit, fuel_remaining;
+	size_t mem_limit;
 	int ret = -1;
 
 	if (engine == NULL || module_name == NULL || func_name == NULL)
 		return (-1);
+
+	/* Read current limits */
+	pthread_rwlock_rdlock(&engine->rwlock);
+	fuel_limit = engine->fuel_limit;
+	mem_limit = engine->memory_limit;
+	pthread_rwlock_unlock(&engine->rwlock);
 
 	/* Find the pre-compiled module */
 	pthread_rwlock_rdlock(&engine->rwlock);
@@ -223,13 +344,22 @@ vwasm_engine_call(struct vwasm_engine *engine,
 	context = wasmtime_store_context(store);
 
 	/* Set fuel limit for this execution */
-	wasmtime_context_set_fuel(context, 100000);
+	wasmtime_context_set_fuel(context, fuel_limit);
+
+	/* Set memory limiter — cap linear memory growth */
+	wasmtime_store_limiter(store, (int64_t)mem_limit, -1, -1, -1, -1);
 
 	/* Instantiate the module via linker (resolves host function imports) */
 	error = wasmtime_linker_instantiate(engine->linker, context,
 	    module, &instance, &trap);
-	if (error != NULL || trap != NULL)
+	if (error != NULL) {
+		log_error(ctx, error, module_name, func_name);
 		goto cleanup;
+	}
+	if (trap != NULL) {
+		log_trap(ctx, trap, module_name, func_name);
+		goto cleanup;
+	}
 
 	/* Resolve the "memory" export for host function string passing */
 	if (wasmtime_instance_export_get(context, &instance,
@@ -249,11 +379,28 @@ vwasm_engine_call(struct vwasm_engine *engine,
 	/* Call the function (no arguments, one i32 result) */
 	error = wasmtime_func_call(context, &item.of.func,
 	    NULL, 0, results, 1, &trap);
-	if (error != NULL || trap != NULL)
+	if (error != NULL) {
+		log_error(ctx, error, module_name, func_name);
 		goto cleanup;
+	}
+	if (trap != NULL) {
+		log_trap(ctx, trap, module_name, func_name);
+		goto cleanup;
+	}
 
 	*result = (int)results[0].of.i32;
 	ret = 0;
+
+	/* Log execution metrics to VSL */
+	if (ctx != NULL && ctx->vsl != NULL) {
+		fuel_remaining = 0;
+		wasmtime_context_get_fuel(context, &fuel_remaining);
+		VSLb(ctx->vsl, SLT_Debug,
+		    "wasm: %s.%s ok, fuel=%llu/%llu used",
+		    module_name, func_name,
+		    (unsigned long long)(fuel_limit - fuel_remaining),
+		    (unsigned long long)fuel_limit);
+	}
 
 cleanup:
 	if (error != NULL)

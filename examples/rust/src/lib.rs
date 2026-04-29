@@ -203,3 +203,44 @@ pub extern "C" fn block_bad_bot() -> i32 {
 
     0
 }
+
+// --- Phase 3: Execution safety test functions ---
+
+/// Infinite loop — will be stopped by fuel exhaustion.
+/// Should never actually return.
+#[no_mangle]
+pub extern "C" fn infinite_loop() -> i32 {
+    let mut i: i64 = 0;
+    loop {
+        i = i.wrapping_add(1);
+        // Prevent the compiler from optimizing this away
+        if i == i64::MIN {
+            return -1; // unreachable in practice
+        }
+    }
+}
+
+/// Try to allocate a large chunk of memory via Vec.
+/// This tests the memory limiter — should trap if limit is low.
+#[no_mangle]
+pub extern "C" fn grow_memory() -> i32 {
+    // Try to allocate 32 MiB (will exceed default 16 MiB limit)
+    let size = 32 * 1024 * 1024;
+    let mut v: Vec<u8> = Vec::with_capacity(size);
+    // Touch the memory so it's actually allocated
+    for i in 0..size {
+        v.push((i & 0xff) as u8);
+    }
+    v.len() as i32
+}
+
+/// A normal computation that uses moderate fuel.
+/// Returns the number of iterations performed.
+#[no_mangle]
+pub extern "C" fn compute_sum() -> i32 {
+    let mut sum: i32 = 0;
+    for i in 0..1000 {
+        sum = sum.wrapping_add(i);
+    }
+    sum
+}

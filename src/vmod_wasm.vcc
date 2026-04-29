@@ -50,3 +50,44 @@ Return the vmod-wasm version string.
 Example::
 
     std.log("vmod-wasm version: " + wasm.version());
+
+$Function VOID set_fuel(INT fuel)
+
+Set the fuel (instruction) limit for Wasm execution. Higher values
+allow more complex computations. Default is 1000000.
+
+Must be called from vcl_init.
+
+Arguments:
+    fuel: Maximum fuel units per execution
+
+Example::
+
+    sub vcl_init {
+        wasm.set_fuel(500000);
+    }
+
+$Function VOID set_memory_limit(INT limit)
+
+Set the maximum linear memory size for Wasm modules in bytes. If a
+module tries to grow memory beyond this limit, the operation fails.
+Default is 16777216 (16 MiB).
+
+Must be called from vcl_init.
+
+Arguments:
+    limit: Maximum memory in bytes
+
+Example::
+
+    sub vcl_init {
+        wasm.set_memory_limit(8388608);
+    }
+
+$Function INT get_fuel()
+
+Return the current fuel limit.
+
+$Function INT get_memory_limit()
+
+Return the current memory limit in bytes.

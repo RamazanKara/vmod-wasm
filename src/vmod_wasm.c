@@ -138,3 +138,63 @@ vmod_version(VRT_CTX)
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 	return (VMOD_WASM_VERSION);
 }
+
+/*
+ * wasm.set_fuel(fuel) — Set fuel (instruction) limit for execution.
+ * Must be called from vcl_init.
+ */
+VCL_VOID
+vmod_set_fuel(VRT_CTX, VCL_INT fuel)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (fuel <= 0) {
+		VRT_fail(ctx, "wasm.set_fuel(): fuel must be positive");
+		return;
+	}
+
+	AN(vwasm_engine_global);
+	vwasm_engine_set_fuel(vwasm_engine_global, (uint64_t)fuel);
+}
+
+/*
+ * wasm.set_memory_limit(limit) — Set maximum Wasm linear memory size.
+ * Must be called from vcl_init.
+ */
+VCL_VOID
+vmod_set_memory_limit(VRT_CTX, VCL_INT limit)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (limit <= 0) {
+		VRT_fail(ctx, "wasm.set_memory_limit(): limit must be positive");
+		return;
+	}
+
+	AN(vwasm_engine_global);
+	vwasm_engine_set_memory_limit(vwasm_engine_global, (size_t)limit);
+}
+
+/*
+ * wasm.get_fuel() — Return current fuel limit.
+ */
+VCL_INT
+vmod_get_fuel(VRT_CTX)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	AN(vwasm_engine_global);
+	return ((VCL_INT)vwasm_engine_get_fuel(vwasm_engine_global));
+}
+
+/*
+ * wasm.get_memory_limit() — Return current memory limit in bytes.
+ */
+VCL_INT
+vmod_get_memory_limit(VRT_CTX)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	AN(vwasm_engine_global);
+	return ((VCL_INT)vwasm_engine_get_memory_limit(vwasm_engine_global));
+}
