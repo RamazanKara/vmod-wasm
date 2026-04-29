@@ -6,15 +6,14 @@ All notable changes to vmod-wasm will be documented in this file.
 
 ### Added
 
-#### Phase 1 — Basic Wasm Execution
+#### Wasm Execution
 - `wasm.load(name, path)` — Load `.wasm` modules at VCL init
 - `wasm.execute(module, func)` — Call exported Wasm functions from VCL
 - `wasm.version()` — Return VMOD version string
 - Wasmtime C API v25 integration with engine/linker/store lifecycle
 - Thread-safe module registry (read-write lock, up to 64 modules)
-- 4 VTC tests: basic_load, allow_decision, block_decision, error_handling
 
-#### Phase 2 — Host Functions
+#### Host Functions
 - 6 host functions under `env` namespace:
   - `get_request_header` — Read any request header
   - `get_request_url` — Read the request URL
@@ -22,16 +21,14 @@ All notable changes to vmod-wasm will be documented in this file.
   - `get_client_ip` — Read the client IP address
   - `set_response_header` — Set a response header
   - `log_msg` — Log messages to Varnish Shared Log (VSL)
-- 3 VTC tests: host_header, host_url_method, host_block_bot
 
-#### Phase 3 — Execution Safety
+#### Execution Safety
 - `wasm.set_fuel(fuel)` — Configurable fuel (instruction) limits
 - `wasm.set_memory_limit(bytes)` — Configurable memory limits
 - `wasm.get_fuel()` / `wasm.get_memory_limit()` — Query current limits
 - Trap message extraction and logging to VSL
-- 3 VTC tests: fuel_exhaustion, memory_limit, resource_config
 
-#### Phase 4 — Proxy-Wasm ABI Compatibility
+#### Proxy-Wasm ABI
 - `wasm.proxy_wasm_on_request(module)` — Execute Proxy-Wasm filter lifecycle
 - 10 Proxy-Wasm host functions:
   - `proxy_log` — Log with Proxy-Wasm log levels
@@ -46,10 +43,9 @@ All notable changes to vmod-wasm will be documented in this file.
   - `proxy_get_buffer_bytes` — Buffer access (stub)
 - Full Proxy-Wasm lifecycle: context_create → vm_start → configure → request_headers
 - Memory allocator protocol via `proxy_on_memory_allocate` export
-- 2 VTC tests: proxy_wasm_basic, proxy_wasm_block
 
-### Infrastructure
+#### Infrastructure
 - Dockerfile with Debian bookworm-slim, Varnish 7.5, Wasmtime 25, Rust
 - GitHub Actions CI pipeline
 - autotools build system (automake/autoconf/libtool)
-- Rust test module (wasm32-unknown-unknown) with functions for all phases
+- 12 VTC tests
