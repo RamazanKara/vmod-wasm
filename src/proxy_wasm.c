@@ -293,7 +293,7 @@ pw_proxy_get_header_map_value(void *env, wasmtime_caller_t *caller,
 	hdr_search[0] = (char)i;
 
 	val = NULL;
-	if (!http_GetHdr(hp, hdr_search, &val) || val == NULL) {
+	if (!http_GetHdr(hp, (hdr_t)hdr_search, &val) || val == NULL) {
 		results[0].of.i32 = PROXY_NOT_FOUND;
 		return (NULL);
 	}
@@ -442,7 +442,7 @@ pw_proxy_remove_header_map_value(void *env, wasmtime_caller_t *caller,
 	}
 	hdr_search[0] = (char)i;
 
-	http_Unset(hp, hdr_search);
+	http_Unset(hp, (hdr_t)hdr_search);
 
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);

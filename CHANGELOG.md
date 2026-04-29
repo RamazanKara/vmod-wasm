@@ -10,7 +10,7 @@ All notable changes to vmod-wasm will be documented in this file.
 - `wasm.load(name, path)` — Load `.wasm` modules at VCL init
 - `wasm.execute(module, func)` — Call exported Wasm functions from VCL
 - `wasm.version()` — Return VMOD version string
-- Wasmtime C API v25 integration with engine/linker/store lifecycle
+- Wasmtime C API integration with engine/linker/store lifecycle
 - Thread-safe module registry (read-write lock, up to 64 modules)
 
 #### Host Functions
@@ -45,7 +45,7 @@ All notable changes to vmod-wasm will be documented in this file.
 - Memory allocator protocol via `proxy_on_memory_allocate` export
 
 #### Infrastructure
-- Dockerfile with Debian bookworm-slim, Varnish 7.5, Wasmtime 25, Rust
+- Dockerfile with Debian bookworm-slim, Varnish 8.0, Wasmtime 44, Rust
 - GitHub Actions CI pipeline
 - autotools build system (automake/autoconf/libtool)
 - 12 VTC tests

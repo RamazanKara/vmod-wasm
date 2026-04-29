@@ -1,7 +1,6 @@
 FROM debian:bookworm-slim
 
-ARG VARNISH_VERSION=7.5
-ARG WASMTIME_VERSION=25.0.0
+ARG WASMTIME_VERSION=44.0.0
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -18,9 +17,10 @@ RUN apt-get update && apt-get install -y \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Varnish from official repo
-RUN curl -fsSL https://packagecloud.io/varnishcache/varnish75/gpgkey | gpg --dearmor -o /usr/share/keyrings/varnish.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/varnish.gpg] https://packagecloud.io/varnishcache/varnish75/debian/ bookworm main" \
+# Install Varnish 8.0 from packagecloud
+RUN curl -fsSL https://packagecloud.io/varnishcache/varnish80/gpgkey \
+       | gpg --dearmor -o /usr/share/keyrings/varnish.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/varnish.gpg] https://packagecloud.io/varnishcache/varnish80/debian/ bookworm main" \
        > /etc/apt/sources.list.d/varnish.list \
     && apt-get update \
     && apt-get install -y varnish-dev varnish \

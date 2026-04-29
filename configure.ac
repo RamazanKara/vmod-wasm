@@ -19,7 +19,7 @@ AC_PROG_INSTALL
 PKG_PROG_PKG_CONFIG
 
 # Find Varnish
-PKG_CHECK_MODULES([VARNISHAPI], [varnishapi >= 7.0])
+PKG_CHECK_MODULES([VARNISHAPI], [varnishapi >= 8.0])
 
 # Find vmodtool.py
 AC_ARG_VAR([VMODTOOL], [path to vmodtool.py])

@@ -9,10 +9,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        varnish-version: ['7.5']
-        wasmtime-version: ['25.0.0']
 
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +16,6 @@ jobs:
       - name: Build and test in Docker
         run: |
           docker build \
-            --build-arg VARNISH_VERSION=${{ matrix.varnish-version }} \
-            --build-arg WASMTIME_VERSION=${{ matrix.wasmtime-version }} \
+            --build-arg WASMTIME_VERSION=44.0.0 \
             -t vmod-wasm-test .
           docker run --rm vmod-wasm-test make check

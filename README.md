@@ -94,8 +94,8 @@ See [`examples/rust/src/lib.rs`](examples/rust/src/lib.rs) for a complete exampl
 
 ### Prerequisites
 
-- Varnish Cache 7.5+ (with dev headers)
-- Wasmtime C API v25+
+- Varnish Cache 8.0+ (with dev headers)
+- Wasmtime C API v44+
 - autotools, pkg-config, C compiler
 
 ### Build
