@@ -50,7 +50,8 @@ size_t vwasm_engine_get_memory_limit(struct vwasm_engine *engine);
  *   4. proxy_on_configure(1, plugin_config_len) — plugin config
  *   5. proxy_on_context_create(2, 1)    — stream context
  *   6. proxy_on_request_headers(2, n, 1) — HTTP request filtering
- *   7. proxy_on_request_body(2, body_len, 1) — body processing
+ *   7. proxy_on_request_body(2, body_len, 1) — body processing (request)
+ *      proxy_on_response_body(2, body_len, 1) — body processing (response)
  *   8. proxy_on_log(2)                  — logging phase
  *   9. proxy_on_done(2)                 — stream done
  *  10. proxy_on_delete(2)               — stream cleanup

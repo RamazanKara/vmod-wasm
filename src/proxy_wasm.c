@@ -145,7 +145,7 @@ pw_proxy_log(void *env, wasmtime_caller_t *caller,
 
 	if (vctx->vsl != NULL) {
 		const char *mod = ctx->module_name ? ctx->module_name : "?";
-		if (level <= PROXY_LOG_DEBUG)
+		if (level <= PROXY_LOG_INFO)
 			VSLb(vctx->vsl, SLT_Debug,
 			    "[wasm:%s] %s", mod, buf);
 		else if (level <= PROXY_LOG_WARN)
@@ -992,6 +992,13 @@ vwasm_proxy_ctx_cleanup(struct vwasm_proxy_ctx *ctx)
 		free((void *)ctx->request_body);
 		ctx->request_body = NULL;
 		ctx->request_body_len = 0;
+	}
+
+	/* Free cached response body (only if heap-allocated) */
+	if (ctx->response_body != NULL && ctx->response_body_heap) {
+		free((void *)ctx->response_body);
+		ctx->response_body = NULL;
+		ctx->response_body_len = 0;
 	}
 
 	/* Free local response body */

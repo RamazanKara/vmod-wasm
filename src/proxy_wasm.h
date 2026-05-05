@@ -180,6 +180,7 @@ struct vwasm_proxy_ctx {
 	int			 request_body_heap;	/* 1 if heap-allocated */
 	const uint8_t		*response_body;
 	size_t			 response_body_len;
+	int			 response_body_heap;	/* 1 if heap-allocated */
 	/* Modified body (if module called set_buffer_bytes on body) */
 	uint8_t			*modified_body;
 	size_t			 modified_body_len;

@@ -1,0 +1,37 @@
+varnishtest "vmod-wasm: Proxy-Wasm response body access via VDP"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "Hello, World!"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("filter", "${sdk_module}");
+        wasm.set_fuel(10000000);
+    }
+
+    sub vcl_deliver {
+        # Run response headers phase and store context for VDP
+        set resp.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_response("filter");
+        # Activate the VDP to intercept response body
+        set resp.filters += "wasm_body";
+    }
+} -start
+
+# Verify VDP calls proxy_on_response_body with correct body size
+logexpect l1 -v v1 -g vxid {
+    expect * * Debug {\[wasm:filter\] sdk-filter: response body size=13}
+} -start
+
+client c1 {
+    txreq -url "/test"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "Hello, World!"
+} -run
+
+logexpect l1 -wait

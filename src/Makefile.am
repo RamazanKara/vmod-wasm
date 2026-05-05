@@ -7,6 +7,8 @@ libvmod_wasm_la_SOURCES = \
 	vmod_wasm.c \
 	wasm_engine.c \
 	wasm_engine.h \
+	vdp_wasm.c \
+	vdp_wasm.h \
 	host_functions.c \
 	host_functions.h \
 	proxy_wasm.c \

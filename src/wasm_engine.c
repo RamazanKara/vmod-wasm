@@ -23,6 +23,7 @@
 #include "host_functions.h"
 #include "proxy_wasm.h"
 #include "proxy_wasm_shared.h"
+#include "vdp_wasm.h"
 
 #define MAX_MODULES 64
 #define VWASM_MAX_BODY_CACHE	(1024 * 1024)  /* 1 MiB max body to cache */
@@ -897,13 +898,68 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 		}
 	}
 
-	if (has_body_handler) {
+	/*
+	 * Response body: defer to VDP pipeline.
+	 *
+	 * If the module exports proxy_on_response_body, we store the wasm
+	 * execution state in PRIV_TASK so the VDP "wasm_body" can invoke it
+	 * after the body has been delivered.  The VDP fini() completes the
+	 * lifecycle (log, done, delete) and destroys the store.
+	 */
+	if (has_body_handler && phase == VWASM_PHASE_RESPONSE) {
+		struct vdp_wasm_task *task;
+		struct vmod_priv *tp;
+
+		task = malloc(sizeof(*task));
+		if (task == NULL)
+			goto cleanup;
+
+		INIT_OBJ(task, VDP_WASM_TASK_MAGIC);
+		task->engine = engine;
+		task->store = store;
+		task->context = context;
+		task->instance = instance;
+		task->phase_body_fn = phase_body_fn;
+		task->ts_start = ts_start;
+		/* Move proxy_ctx to heap (task owns it now) */
+		memcpy(&task->proxy_ctx, &proxy_ctx, sizeof(proxy_ctx));
+		/* Update wasmtime store data to point to new proxy_ctx location */
+		wasmtime_context_set_data(task->context, &task->proxy_ctx);
+
+		/* Store in PRIV_TASK for VDP to retrieve */
+		tp = VRT_priv_task(ctx, vdp_wasm_task_id);
+		if (tp == NULL) {
+			vwasm_proxy_ctx_cleanup(&task->proxy_ctx);
+			wasmtime_store_delete(store);
+			free(task);
+			goto cleanup;
+		}
+		tp->priv = task;
+		tp->methods = &vdp_wasm_task_methods;
+
+		/* Count the call (VDP fini will count success/body stats) */
+		__sync_fetch_and_add(&engine->stats.calls_total, 1);
+		if (proxy_ctx.local_response_set)
+			__sync_fetch_and_add(
+			    &engine->stats.local_responses, 1);
+
+		/*
+		 * Return success — body/log/done/delete are deferred to VDP.
+		 * Do NOT free store or proxy_ctx here; VDP fini owns them.
+		 * Zero out proxy_ctx so cleanup label won't double-free.
+		 */
+		memset(&proxy_ctx, 0, sizeof(proxy_ctx));
+		store = NULL;
+		*status_code = 0;
+		return ((int)action);
+	}
+
+	/* Request body: invoke proxy_on_request_body inline */
+	if (has_body_handler && phase == VWASM_PHASE_REQUEST) {
 		args[0].kind = WASMTIME_I32;
 		args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
 		args[1].kind = WASMTIME_I32;
-		args[1].of.i32 = (int32_t)(phase == VWASM_PHASE_REQUEST ?
-		    proxy_ctx.request_body_len :
-		    proxy_ctx.response_body_len);
+		args[1].of.i32 = (int32_t)proxy_ctx.request_body_len;
 		args[2].kind = WASMTIME_I32;
 		args[2].of.i32 = 1;
 		call_wasm_func(context, &instance,
@@ -956,13 +1012,17 @@ cleanup:
 	if (proxy_ctx.request_body_len > 0)
 		__sync_fetch_and_add(&engine->stats.body_bytes_in,
 		    proxy_ctx.request_body_len);
+	if (proxy_ctx.response_body_len > 0)
+		__sync_fetch_and_add(&engine->stats.body_bytes_in,
+		    proxy_ctx.response_body_len);
 
 	vwasm_proxy_ctx_cleanup(&proxy_ctx);
 	if (error != NULL)
 		wasmtime_error_delete(error);
 	if (trap != NULL)
 		wasm_trap_delete(trap);
-	wasmtime_store_delete(store);
+	if (store != NULL)
+		wasmtime_store_delete(store);
 	return (ret);
 }
 

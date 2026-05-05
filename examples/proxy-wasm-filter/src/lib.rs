@@ -52,4 +52,13 @@ impl HttpContext for FilterHttp {
         self.set_http_response_header("X-Wasm-SDK-Response", Some("processed"));
         Action::Continue
     }
+
+    fn on_http_response_body(&mut self, body_size: usize, _end_of_stream: bool) -> Action {
+        // Log body size (VDP delivers body after headers are sent, so we log instead)
+        proxy_wasm::hostcalls::log(
+            LogLevel::Info,
+            &format!("sdk-filter: response body size={}", body_size),
+        ).ok();
+        Action::Continue
+    }
 }

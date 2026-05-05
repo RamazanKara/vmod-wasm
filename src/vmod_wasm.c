@@ -32,6 +32,7 @@
 #include "vcc_if.h"
 #include "wasm_engine.h"
 #include "proxy_wasm.h"
+#include "vdp_wasm.h"
 
 #define VMOD_WASM_VERSION "1.0.0"
 
@@ -57,9 +58,13 @@ vmod_vmod_event(VRT_CTX, struct vmod_priv *priv, enum vcl_event_e e)
 		AZ(pthread_mutex_unlock(&engine_mtx));
 		if (vwasm_engine_global == NULL)
 			return (-1);
+		/* Register VDP for response body interception */
+		VRT_AddFilter(ctx, NULL, &vdp_wasm_body);
 		return (0);
 
 	case VCL_EVENT_DISCARD:
+		/* Unregister VDP */
+		VRT_RemoveFilter(ctx, NULL, &vdp_wasm_body);
 		AZ(pthread_mutex_lock(&engine_mtx));
 		if (vwasm_engine_global != NULL) {
 			vwasm_engine_destroy(&vwasm_engine_global);

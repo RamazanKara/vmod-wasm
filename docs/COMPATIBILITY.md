@@ -88,7 +88,7 @@ This document tracks the implementation status of the
 | `proxy_on_request_headers` | ✅ Called | In vcl_recv |
 | `proxy_on_response_headers` | ✅ Called | In vcl_deliver/vcl_backend_response |
 | `proxy_on_request_body` | ✅ Called | Cached body via VRT_CacheReqBody (≤1 MiB) |
-| `proxy_on_response_body` | ⚠️ Stub | Called with body_size=0 (streaming limitation) |
+| `proxy_on_response_body` | ✅ VDP | Delivered via Varnish Delivery Processor; body buffered (up to 1 MiB) and passed to callback on stream end |
 | `proxy_on_log` | ✅ Called | In lifecycle step 7 |
 | `proxy_on_done` | ✅ Called | In lifecycle step 8 |
 | `proxy_on_http_call_response` | ✅ Called | After HTTP callout completes |
