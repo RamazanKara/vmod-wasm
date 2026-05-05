@@ -110,6 +110,19 @@ vwasm_engine_new(void)
 	e->http_call_max = VWASM_DEFAULT_HTTP_CALL_MAX;
 	e->fail_mode = VWASM_FAIL_CLOSED;
 
+	/*
+	 * Pre-warm: create and destroy a dummy store to trigger any lazy
+	 * internal initialization in wasmtime (signal handlers, thread-local
+	 * state, memory pools).  Works around a hang observed on x86_64 where
+	 * the first wasmtime_store_new from a worker thread blocks.
+	 */
+	{
+		wasmtime_store_t *warmup;
+		warmup = wasmtime_store_new(e->engine, NULL, NULL);
+		if (warmup != NULL)
+			wasmtime_store_delete(warmup);
+	}
+
 	return (e);
 }
 

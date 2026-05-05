@@ -26,6 +26,8 @@ varnish v1 -vcl+backend {
     }
 } -start
 
+delay 1.0
+
 # BadBot should be blocked with 403
 client c1 {
     txreq -url "/" -hdr "User-Agent: EvilBadBot/1.0"
