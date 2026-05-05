@@ -48,6 +48,12 @@ sub vcl_recv {
         return (synth(403, "Blocked"));
     }
 }
+
+sub vcl_deliver {
+    # Response headers + body inspection via VDP
+    set resp.http.X-Wasm-Action = wasm.proxy_wasm_on_response("waf");
+    set resp.filters += "wasm_body";
+}
 ```
 
 ## VCL Functions

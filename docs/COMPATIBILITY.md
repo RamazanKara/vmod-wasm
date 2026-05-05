@@ -70,8 +70,8 @@ This document tracks the implementation status of the
 | Function | Status | Notes |
 |----------|--------|-------|
 | `proxy_send_local_response` | ✅ Implemented | Captures body + headers |
-| `proxy_set_effective_context` | ⚠️ Stub | Returns OK (no-op) |
-| `proxy_done` | ⚠️ Stub | Returns OK (no-op) |
+| `proxy_set_effective_context` | ✅ No-op | Single context per call; switching not needed |
+| `proxy_done` | ✅ No-op | Host manages lifecycle; module signal not required |
 
 ### Memory
 | Function | Status | Notes |

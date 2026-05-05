@@ -24,7 +24,21 @@ impl RootContext for FilterRoot {
 
 struct FilterHttp;
 
-impl Context for FilterHttp {}
+impl Context for FilterHttp {
+    fn on_http_call_response(
+        &mut self,
+        _token_id: u32,
+        _num_headers: usize,
+        body_size: usize,
+        _num_trailers: usize,
+    ) {
+        proxy_wasm::hostcalls::log(
+            LogLevel::Info,
+            &format!("sdk-filter: http call response body_size={}", body_size),
+        )
+        .ok();
+    }
+}
 
 impl HttpContext for FilterHttp {
     fn on_http_request_headers(&mut self, _num_headers: usize, _end_of_stream: bool) -> Action {

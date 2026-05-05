@@ -132,6 +132,23 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 - Memory limit enforcement is near-zero cost (page fault based)
 - HTTP callouts are synchronous — keep timeouts short
 
+## Response Body Inspection
+
+To enable response body inspection via Proxy-Wasm:
+
+```vcl
+sub vcl_deliver {
+    set resp.http.X-Wasm-Action = wasm.proxy_wasm_on_response("filter");
+    set resp.filters += "wasm_body";
+}
+```
+
+- The `wasm_body` VDP buffers response body (up to 1 MiB) and calls
+  `proxy_on_response_body` on stream end
+- Body is passed through to the client immediately (no buffering delay)
+- The callback is for inspection only — body modification is not supported
+- If the response body exceeds 1 MiB, the callback receives truncated data
+
 ## Upgrading Modules
 
 1. Build and test the new `.wasm` file
