@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 #include <wasm.h>
 #include <wasmtime.h>
@@ -109,19 +108,6 @@ vwasm_engine_new(void)
 	e->num_allowed_upstreams = 0;
 	e->http_call_max = VWASM_DEFAULT_HTTP_CALL_MAX;
 	e->fail_mode = VWASM_FAIL_CLOSED;
-
-	/*
-	 * Pre-warm: create and destroy a dummy store to trigger any lazy
-	 * internal initialization in wasmtime (signal handlers, thread-local
-	 * state, memory pools).  Works around a hang observed on x86_64 where
-	 * the first wasmtime_store_new from a worker thread blocks.
-	 */
-	{
-		wasmtime_store_t *warmup;
-		warmup = wasmtime_store_new(e->engine, NULL, NULL);
-		if (warmup != NULL)
-			wasmtime_store_delete(warmup);
-	}
 
 	return (e);
 }
@@ -764,36 +750,20 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 
 	/* Create a per-call store with proxy context as data */
 	clock_gettime(CLOCK_MONOTONIC, &ts_start);
-	write(STDERR_FILENO, "WASM-DBG: [0] diag NULL\n", 24);
-	{
-		wasmtime_store_t *diag;
-		diag = wasmtime_store_new(engine->engine, NULL, NULL);
-		write(STDERR_FILENO, "WASM-DBG: [0a] diag ok\n", 23);
-		if (diag != NULL)
-			wasmtime_store_delete(diag);
-		write(STDERR_FILENO, "WASM-DBG: [0b] diag del\n", 24);
-	}
-	write(STDERR_FILENO, "WASM-DBG: [1] enter\n", 20);
 	store = wasmtime_store_new(engine->engine, &proxy_ctx, NULL);
-	write(STDERR_FILENO, "WASM-DBG: [2] store_new done\n", 29);
 	if (store == NULL)
 		return (-1);
 
 	context = wasmtime_store_context(store);
-	write(STDERR_FILENO, "WASM-DBG: [3] store_context done\n", 33);
 	proxy_ctx.wasm_ctx = context;
 
 	/* Set execution limits */
 	wasmtime_context_set_fuel(context, fuel_limit);
-	write(STDERR_FILENO, "WASM-DBG: [4] set_fuel done\n", 28);
 	wasmtime_store_limiter(store, (int64_t)mem_limit, -1, -1, -1, -1);
-	write(STDERR_FILENO, "WASM-DBG: [5] store_limiter done\n", 33);
 
 	/* Instantiate from pre-validated instance */
-	write(STDERR_FILENO, "WASM-DBG: [6] instantiating\n", 28);
 	error = wasmtime_instance_pre_instantiate(entry->instance_pre,
 	    context, &instance, &trap);
-	write(STDERR_FILENO, "WASM-DBG: [7] instantiate done\n", 31);
 	if (error != NULL) {
 		log_error(ctx, error, module_name, "instantiate");
 		goto cleanup;
@@ -824,9 +794,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	}
 
 	/* Call _initialize if exported */
-	write(STDERR_FILENO, "WASM-DBG: [8] calling _initialize\n", 34);
 	call_wasm_void(context, &instance, "_initialize", NULL, 0);
-	write(STDERR_FILENO, "WASM-DBG: [9] _initialize done\n", 31);
 
 	/* 1. Create root context */
 	args[0].kind = WASMTIME_I32;
@@ -835,7 +803,6 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	args[1].of.i32 = 0;
 	call_wasm_void(context, &instance,
 	    "proxy_on_context_create", args, 2);
-	write(STDERR_FILENO, "WASM-DBG: [10] root ctx created\n", 32);
 
 	/* 2. VM start */
 	args[0].kind = WASMTIME_I32;
@@ -844,7 +811,6 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	args[1].of.i32 = (int32_t)vm_config_len;
 	call_wasm_func(context, &instance,
 	    "proxy_on_vm_start", args, 2, NULL);
-	write(STDERR_FILENO, "WASM-DBG: [11] vm_start done\n", 29);
 
 	/* 3. Configure */
 	args[0].kind = WASMTIME_I32;
@@ -853,7 +819,6 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	args[1].of.i32 = (int32_t)plugin_config_len;
 	call_wasm_func(context, &instance,
 	    "proxy_on_configure", args, 2, NULL);
-	write(STDERR_FILENO, "WASM-DBG: [12] configure done\n", 30);
 
 	/* 4. Create stream context */
 	args[0].kind = WASMTIME_I32;
@@ -862,7 +827,6 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	args[1].of.i32 = (int32_t)proxy_ctx.root_context_id;
 	call_wasm_void(context, &instance,
 	    "proxy_on_context_create", args, 2);
-	write(STDERR_FILENO, "WASM-DBG: [13] stream ctx created\n", 34);
 
 	/* 5. Call phase-specific headers callback */
 	if (phase == VWASM_PHASE_REQUEST) {
@@ -881,13 +845,11 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	args[2].of.i32 = 1; /* end_of_stream */
 
 	action = 0;
-	write(STDERR_FILENO, "WASM-DBG: [14] calling headers\n", 31);
 	if (call_wasm_func(context, &instance,
 	    phase_headers_fn, args, 3, &action) != 0) {
 		log_error(ctx, NULL, module_name, phase_headers_fn);
 		goto cleanup;
 	}
-	write(STDERR_FILENO, "WASM-DBG: [15] headers done\n", 28);
 
 	/* Check if module called send_local_response */
 	if (proxy_ctx.local_response_set) {
