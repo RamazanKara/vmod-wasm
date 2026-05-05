@@ -38,8 +38,12 @@ src/vcc_if.h
 *.swp
 *.swo
 
-# Rust build (test modules)
-examples/rust/target/
+# Rust build artifacts and vendored deps
+**/target/
+**/vendor/
+
+# Internal planning docs
+/plan/
 
 # OS
 .DS_Store
