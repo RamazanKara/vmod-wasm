@@ -193,6 +193,9 @@ struct vwasm_proxy_ctx {
 	/* Upstream allowlist (NULL = allow all, for backwards compat) */
 	const char		**allowed_upstreams;
 	uint32_t		 num_allowed_upstreams;
+
+	/* Fuel limit for refueling during callbacks */
+	uint64_t		 fuel_limit;
 };
 
 /* ----------------------------------------------------------------

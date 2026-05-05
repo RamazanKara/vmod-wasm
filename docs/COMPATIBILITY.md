@@ -36,7 +36,7 @@ This document tracks the implementation status of the
 ### HTTP Calls
 | Function | Status | Notes |
 |----------|--------|-------|
-| `proxy_http_call` | ✅ Implemented | With allowlist + rate limit |
+| `proxy_http_call` | ✅ Implemented | With allowlist, rate limit, and callback |
 
 ### Shared Data
 | Function | Status | Notes |
@@ -124,19 +124,17 @@ Response maps include:
 
 ## Limitations
 
-1. **Response body streaming**: `on_response_body` is called with body_size=0
-   because Varnish streams response bodies to clients. Request bodies are
-   available if ≤1 MiB (automatically cached).
+1. **Synchronous HTTP calls**: `proxy_http_call` blocks the request thread
+   until the upstream responds or times out (default 5s). The
+   `proxy_on_http_call_response` callback is invoked inline after the
+   response is received, matching the spec's callback pattern.
 
-2. **Synchronous HTTP calls**: `proxy_http_call` blocks the request thread
-   until the upstream responds or times out (default 5s).
-
-3. **Anti-IP-rebinding**: HTTP calls reject resolved private/internal IPs
+2. **Anti-IP-rebinding**: HTTP calls reject resolved private/internal IPs
    (RFC1918, RFC5735, RFC4193, loopback) to prevent SSRF.
 
-4. **No gRPC support**: gRPC-specific features are not implemented.
+3. **No gRPC support**: gRPC-specific features are not implemented.
 
-5. **No L4 (TCP/UDP) support**: Only HTTP filter context is supported.
+4. **No L4 (TCP/UDP) support**: Only HTTP filter context is supported.
 
-6. **Single filter per execution**: Unlike Envoy's filter chain, each
+5. **Single filter per execution**: Unlike Envoy's filter chain, each
    `proxy_wasm_on_request()` call runs one module. Chain in VCL if needed.

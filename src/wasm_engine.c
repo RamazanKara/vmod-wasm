@@ -748,6 +748,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	proxy_ctx.http_call_max = engine->http_call_max;
 	proxy_ctx.allowed_upstreams = (const char **)engine->allowed_upstreams;
 	proxy_ctx.num_allowed_upstreams = engine->num_allowed_upstreams;
+	proxy_ctx.fuel_limit = fuel_limit;
 
 	/* Create a per-call store with proxy context as data */
 	clock_gettime(CLOCK_MONOTONIC, &ts_start);

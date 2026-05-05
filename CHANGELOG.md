@@ -2,6 +2,24 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [2.2.0] - 2026-05-05
+
+### Added
+- **Response body access via VDP**: `proxy_on_response_body` now receives
+  actual response body data via Varnish Delivery Processor pipeline. Body
+  is buffered (up to 1 MiB) and passed to the callback on stream end.
+  Activate with `set resp.filters += "wasm_body"` in `vcl_deliver`.
+- **HTTP call response callback**: `proxy_on_http_call_response` is now
+  invoked after `proxy_http_call` completes, matching the Proxy-Wasm ABI
+  spec's async callback pattern. Previously modules had to read response
+  data directly via `proxy_get_buffer_bytes`.
+
+### Fixed
+- `proxy_log` level mapping: `LogLevel::Info` no longer incorrectly gets
+  "WARN:" prefix (threshold changed from DEBUG to INFO).
+- Fuel exhaustion in VDP/HTTP callbacks: fuel is now refilled before each
+  body phase, lifecycle callback, and HTTP call response callback.
+
 ## [2.0.0] - 2026-05-05
 
 ### Added

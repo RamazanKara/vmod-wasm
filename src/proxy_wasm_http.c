@@ -481,6 +481,50 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 		return (NULL);
 	}
 
+	/*
+	 * Call proxy_on_http_call_response per Proxy-Wasm ABI spec.
+	 * The module receives the callback with response data accessible
+	 * via proxy_get_buffer_bytes(HTTP_CALL_RESPONSE_BODY/HEADERS).
+	 */
+	{
+		wasmtime_extern_t cb_item;
+		if (wasmtime_caller_export_get(caller,
+		    "proxy_on_http_call_response", 27, &cb_item) &&
+		    cb_item.kind == WASMTIME_EXTERN_FUNC) {
+			wasmtime_val_t cb_args[5];
+			wasmtime_context_t *cb_ctx;
+			wasmtime_error_t *cb_err;
+			wasm_trap_t *cb_trap = NULL;
+
+			cb_ctx = wasmtime_caller_context(caller);
+
+			/* Refuel for the callback */
+			if (ctx->fuel_limit > 0)
+				wasmtime_context_set_fuel(cb_ctx,
+				    ctx->fuel_limit);
+
+			cb_args[0].kind = WASMTIME_I32;
+			cb_args[0].of.i32 =
+			    (int32_t)ctx->stream_context_id;
+			cb_args[1].kind = WASMTIME_I32;
+			cb_args[1].of.i32 = (int32_t)token_id;
+			cb_args[2].kind = WASMTIME_I32;
+			cb_args[2].of.i32 = (int32_t)resp_num_headers;
+			cb_args[3].kind = WASMTIME_I32;
+			cb_args[3].of.i32 = (int32_t)resp_body_len;
+			cb_args[4].kind = WASMTIME_I32;
+			cb_args[4].of.i32 = 0; /* num_trailers */
+
+			cb_err = wasmtime_func_call(cb_ctx,
+			    &cb_item.of.func, cb_args, 5,
+			    NULL, 0, &cb_trap);
+			if (cb_err != NULL)
+				wasmtime_error_delete(cb_err);
+			if (cb_trap != NULL)
+				wasm_trap_delete(cb_trap);
+		}
+	}
+
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);
 }
