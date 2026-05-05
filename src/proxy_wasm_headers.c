@@ -93,9 +93,6 @@ pw_proxy_get_header_map_value(void *env, wasmtime_caller_t *caller,
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
 	AN(ctx);
 	results[0].kind = WASMTIME_I32;
-	fprintf(stderr, "VMOD-WASM-DEBUG: get_header_map_value map=%d\n",
-	    args[0].of.i32);
-	fflush(stderr);
 
 	hp = pw_get_header_map(ctx, args[0].of.i32);
 	if (hp == NULL) {

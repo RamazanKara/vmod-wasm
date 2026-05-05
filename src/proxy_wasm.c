@@ -178,9 +178,6 @@ pw_proxy_send_local_response(void *env, wasmtime_caller_t *caller,
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
 	AN(ctx);
 	results[0].kind = WASMTIME_I32;
-	fprintf(stderr, "VMOD-WASM-DEBUG: send_local_response called status=%d\n",
-	    args[0].of.i32);
-	fflush(stderr);
 
 	/*
 	 * ABI: proxy_send_local_response(
