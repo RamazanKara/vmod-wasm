@@ -764,6 +764,15 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 
 	/* Create a per-call store with proxy context as data */
 	clock_gettime(CLOCK_MONOTONIC, &ts_start);
+	write(STDERR_FILENO, "WASM-DBG: [0] diag NULL\n", 24);
+	{
+		wasmtime_store_t *diag;
+		diag = wasmtime_store_new(engine->engine, NULL, NULL);
+		write(STDERR_FILENO, "WASM-DBG: [0a] diag ok\n", 23);
+		if (diag != NULL)
+			wasmtime_store_delete(diag);
+		write(STDERR_FILENO, "WASM-DBG: [0b] diag del\n", 24);
+	}
 	write(STDERR_FILENO, "WASM-DBG: [1] enter\n", 20);
 	store = wasmtime_store_new(engine->engine, &proxy_ctx, NULL);
 	write(STDERR_FILENO, "WASM-DBG: [2] store_new done\n", 29);
