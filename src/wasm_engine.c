@@ -752,6 +752,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	clock_gettime(CLOCK_MONOTONIC, &ts_start);
 	fprintf(stderr, "VMOD-WASM-DEBUG: proxy_wasm_execute enter module=%s phase=%d fuel=%llu\n",
 	    module_name, phase, (unsigned long long)fuel_limit);
+	fflush(stderr);
 	store = wasmtime_store_new(engine->engine, &proxy_ctx, NULL);
 	if (store == NULL)
 		return (-1);
@@ -765,10 +766,12 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 
 	/* Instantiate from pre-validated instance */
 	fprintf(stderr, "VMOD-WASM-DEBUG: instantiating...\n");
+	fflush(stderr);
 	error = wasmtime_instance_pre_instantiate(entry->instance_pre,
 	    context, &instance, &trap);
 	fprintf(stderr, "VMOD-WASM-DEBUG: instantiate done err=%p trap=%p\n",
 	    (void *)error, (void *)trap);
+	fflush(stderr);
 	if (error != NULL) {
 		log_error(ctx, error, module_name, "instantiate");
 		goto cleanup;
@@ -800,8 +803,10 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 
 	/* Call _initialize if exported */
 	fprintf(stderr, "VMOD-WASM-DEBUG: calling _initialize\n");
+	fflush(stderr);
 	call_wasm_void(context, &instance, "_initialize", NULL, 0);
 	fprintf(stderr, "VMOD-WASM-DEBUG: _initialize done\n");
+	fflush(stderr);
 
 	/* 1. Create root context */
 	args[0].kind = WASMTIME_I32;
@@ -811,6 +816,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	call_wasm_void(context, &instance,
 	    "proxy_on_context_create", args, 2);
 	fprintf(stderr, "VMOD-WASM-DEBUG: root context created\n");
+	fflush(stderr);
 
 	/* 2. VM start */
 	args[0].kind = WASMTIME_I32;
@@ -818,9 +824,11 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	args[1].kind = WASMTIME_I32;
 	args[1].of.i32 = (int32_t)vm_config_len;
 	fprintf(stderr, "VMOD-WASM-DEBUG: calling proxy_on_vm_start vm_config_len=%zu\n", vm_config_len);
+	fflush(stderr);
 	call_wasm_func(context, &instance,
 	    "proxy_on_vm_start", args, 2, NULL);
 	fprintf(stderr, "VMOD-WASM-DEBUG: vm_start done\n");
+	fflush(stderr);
 
 	/* 3. Configure */
 	args[0].kind = WASMTIME_I32;
@@ -828,9 +836,11 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	args[1].kind = WASMTIME_I32;
 	args[1].of.i32 = (int32_t)plugin_config_len;
 	fprintf(stderr, "VMOD-WASM-DEBUG: calling proxy_on_configure plugin_config_len=%zu\n", plugin_config_len);
+	fflush(stderr);
 	call_wasm_func(context, &instance,
 	    "proxy_on_configure", args, 2, NULL);
 	fprintf(stderr, "VMOD-WASM-DEBUG: configure done\n");
+	fflush(stderr);
 
 	/* 4. Create stream context */
 	args[0].kind = WASMTIME_I32;
@@ -840,6 +850,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	call_wasm_void(context, &instance,
 	    "proxy_on_context_create", args, 2);
 	fprintf(stderr, "VMOD-WASM-DEBUG: stream context created\n");
+	fflush(stderr);
 
 	/* 5. Call phase-specific headers callback */
 	if (phase == VWASM_PHASE_REQUEST) {
@@ -860,6 +871,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	action = 0;
 	fprintf(stderr, "VMOD-WASM-DEBUG: calling %s num_headers=%d\n",
 	    phase_headers_fn, num_headers);
+	fflush(stderr);
 	if (call_wasm_func(context, &instance,
 	    phase_headers_fn, args, 3, &action) != 0) {
 		fprintf(stderr, "VMOD-WASM-DEBUG: %s FAILED\n", phase_headers_fn);
@@ -868,6 +880,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	}
 	fprintf(stderr, "VMOD-WASM-DEBUG: %s returned action=%d local_response=%d\n",
 	    phase_headers_fn, action, proxy_ctx.local_response_set);
+	fflush(stderr);
 
 	/* Check if module called send_local_response */
 	if (proxy_ctx.local_response_set) {
