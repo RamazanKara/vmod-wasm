@@ -864,7 +864,8 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	    item.kind == WASMTIME_EXTERN_FUNC;
 
 	if (has_body_handler && phase == VWASM_PHASE_REQUEST &&
-	    ctx->req != NULL) {
+	    ctx->req != NULL &&
+	    ctx->req->req_body_status != BS_NONE) {
 		VCL_BYTES cached_size;
 		cached_size = VRT_CacheReqBody(ctx, VWASM_MAX_BODY_CACHE);
 		if (cached_size > 0) {

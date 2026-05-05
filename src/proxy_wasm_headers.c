@@ -363,8 +363,10 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 		if (idx >= hp->nhd)
 			break;
 		hdr_line = hp->hd[idx].b;
-		if (hdr_line == NULL)
+		if (hdr_line == NULL) {
+			total_size += 2; /* two null terminators */
 			continue;
+		}
 		colon = strchr(hdr_line, ':');
 		if (colon == NULL) {
 			total_size += strlen(hdr_line) + 1 + 1;
@@ -446,8 +448,11 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 		if (idx >= hp->nhd)
 			break;
 		hdr_line = hp->hd[idx].b;
-		if (hdr_line == NULL)
+		if (hdr_line == NULL) {
+			buf[offset++] = '\0';
+			buf[offset++] = '\0';
 			continue;
+		}
 
 		colon = strchr(hdr_line, ':');
 		if (colon == NULL) {
