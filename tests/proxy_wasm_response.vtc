@@ -1,0 +1,30 @@
+varnishtest "vmod-wasm: Proxy-Wasm response header filtering in vcl_deliver"
+
+server s1 {
+    rxreq
+    txresp -status 200 -hdr "X-Backend: origin" -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("filter", "${wasm_module}");
+        wasm.set_fuel(10000000);
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Response-Action =
+            wasm.proxy_wasm_on_response("filter");
+    }
+} -start
+
+# Response should have X-Wasm-Response header added by the filter
+client c1 {
+    txreq -url "/test" -hdr "User-Agent: Mozilla/5.0"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Backend == "origin"
+    expect resp.http.X-Wasm-Response == "processed"
+    expect resp.http.X-Wasm-Response-Action == "0"
+} -run

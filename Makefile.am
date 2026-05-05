@@ -15,6 +15,7 @@ check-local:
 			$(VARNISHTEST) \
 				-Dvmod_wasm="$(abs_top_builddir)/src/.libs/libvmod_wasm.so" \
 				-Dwasm_module="$(abs_top_srcdir)/tests/wasm/test_module.wasm" \
+				-Dsdk_module="$(abs_top_srcdir)/tests/wasm/proxy_wasm_filter.wasm" \
 				$$t || exit 1; \
 		done; \
 	else \

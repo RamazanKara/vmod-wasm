@@ -54,22 +54,30 @@ sub vcl_recv {
 
 | Function | Description |
 |----------|-------------|
-| `wasm.load(name, path)` | Load a `.wasm` module |
-| `wasm.execute(module, func)` | Call an exported function, returns i32 as string |
-| `wasm.proxy_wasm_on_request(module)` | Run Proxy-Wasm filter lifecycle (0=allow, >0=status, -1=error) |
-| `wasm.set_fuel(fuel)` | Set instruction limit per execution |
-| `wasm.set_memory_limit(bytes)` | Set max linear memory |
+| `wasm.load(name, path)` | Load and compile a .wasm module |
+| `wasm.execute(module, func)` | Call an exported function (non-proxy-wasm) |
+| `wasm.version()` | Return vmod-wasm version string |
+| `wasm.set_fuel(fuel)` | Max instruction fuel per execution |
+| `wasm.set_memory_limit(bytes)` | Max Wasm linear memory in bytes |
 | `wasm.get_fuel()` | Return current fuel limit |
 | `wasm.get_memory_limit()` | Return current memory limit |
-| `wasm.version()` | Return VMOD version |
+| `wasm.proxy_wasm_on_request(module)` | Run Proxy-Wasm request lifecycle |
+| `wasm.proxy_wasm_on_response(module)` | Run Proxy-Wasm response lifecycle |
+| `wasm.proxy_wasm_on_request_configured(module, vm, plugin)` | Request lifecycle with config |
+| `wasm.proxy_wasm_on_response_configured(module, vm, plugin)` | Response lifecycle with config |
+| `wasm.set_allowed_upstreams(list)` | Upstream allowlist (SSRF prevention) |
+| `wasm.set_http_call_limit(limit)` | Max HTTP callouts per request |
+| `wasm.set_fail_mode(mode)` | "closed" or "open" on error |
+| `wasm.get_metrics_json()` | Return Proxy-Wasm metrics as JSON |
+| `wasm.get_stats_json()` | Return execution statistics as JSON |
 
 ## Host Functions
 
-Registered under the `env` namespace, available to all Wasm modules:
+Registered under the `env` namespace for non-proxy-wasm modules:
 
-**Request inspection:** `get_request_header`, `get_request_url`, `get_request_method`, `get_client_ip`, `set_response_header`, `log_msg`
+`get_request_header`, `get_request_url`, `get_request_method`, `get_client_ip`, `set_response_header`, `log_msg`
 
-**Proxy-Wasm ABI:** `proxy_log`, `proxy_get_header_map_value`, `proxy_add_header_map_value`, `proxy_replace_header_map_value`, `proxy_remove_header_map_value`, `proxy_get_property`, `proxy_send_local_response`, `proxy_get_current_time_nanoseconds`, `proxy_set_effective_context`, `proxy_get_buffer_bytes`
+For the full Proxy-Wasm ABI compatibility matrix, see [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
 ## Writing Wasm Modules
 

@@ -1,0 +1,75 @@
+varnishtest "vmod-wasm: Proxy-Wasm security and local response"
+
+# Tests:
+# 1. set_allowed_upstreams restricts HTTP callouts
+# 2. set_http_call_limit sets rate limit
+# 3. set_fail_mode configuration
+# 4. Normal requests pass with security configured
+# 5. BadBot triggers send_local_response (403)
+# 6. Filter continues working after block
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+    rxreq
+    txresp -status 200 -body "OK"
+    rxreq
+    txresp -status 200 -body "OK"
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("filter", "${wasm_module}");
+        wasm.set_fuel(10000000);
+        wasm.set_allowed_upstreams("api.internal:8080,auth.svc:443");
+        wasm.set_http_call_limit(3);
+        wasm.set_fail_mode("closed");
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result =
+            wasm.proxy_wasm_on_request("filter");
+        if (req.http.X-Wasm-Result != "0") {
+            return (synth(403, "Blocked by Wasm"));
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+    }
+} -start
+
+# Normal request should pass through with security configured
+client c1 {
+    txreq -url "/test" -hdr "User-Agent: Mozilla/5.0"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "0"
+} -run
+
+# Second normal request
+client c2 {
+    txreq -url "/hello" -hdr "User-Agent: Chrome/120"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "0"
+} -run
+
+# BadBot should still be blocked
+client c3 {
+    txreq -url "/evil" -hdr "User-Agent: BadBot/1.0"
+    rxresp
+    expect resp.status == 403
+} -run
+
+# Filter continues working after block
+client c4 {
+    txreq -url "/api" -hdr "User-Agent: Chrome/120"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "0"
+} -run

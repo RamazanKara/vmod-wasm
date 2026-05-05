@@ -1,0 +1,65 @@
+varnishtest "vmod-wasm: Proxy-Wasm metrics JSON endpoint"
+
+# This test verifies:
+# 1. get_metrics_json() returns "{}" when no metrics exist
+# 2. After proxy-wasm execution, metrics can be retrieved
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("filter", "${wasm_module}");
+        wasm.set_fuel(10000000);
+    }
+
+    sub vcl_recv {
+        if (req.url == "/__metrics") {
+            return (synth(200, "Metrics"));
+        }
+        set req.http.X-Wasm-Result =
+            wasm.proxy_wasm_on_request("filter");
+    }
+
+    sub vcl_synth {
+        if (req.url == "/__metrics") {
+            set resp.http.Content-Type = "application/json";
+            set resp.http.X-Metrics = wasm.get_metrics_json();
+            return (deliver);
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+    }
+} -start
+
+# Before any Wasm execution, metrics should be empty
+client c1 {
+    txreq -url "/__metrics"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.Content-Type == "application/json"
+    expect resp.http.X-Metrics == "{}"
+} -run
+
+# Execute a request through the Wasm filter
+client c2 {
+    txreq -url "/test" -hdr "User-Agent: Mozilla/5.0"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "0"
+} -run
+
+# After execution, metrics may still be empty if the module doesn't
+# record metrics (our test module doesn't call proxy_record_metric)
+client c3 {
+    txreq -url "/__metrics"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Metrics == "{}"
+} -run

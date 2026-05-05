@@ -1,0 +1,74 @@
+varnishtest "vmod-wasm: Proxy-Wasm lifecycle — basic and configured"
+
+# Tests:
+# 1. Basic proxy_wasm_on_request allows + adds header
+# 2. proxy_wasm_on_request_configured passes configs
+# 3. proxy_wasm_on_response_configured works
+# 4. BadBot blocking via send_local_response
+
+server s1 {
+    rxreq
+    expect req.http.X-Wasm-Filter == "proxy-wasm"
+    txresp -status 200 -body "OK"
+    rxreq
+    txresp -status 200 -body "Response Body"
+    rxreq
+    txresp -status 200 -body "Response Body"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("filter", "${wasm_module}");
+        wasm.set_fuel(10000000);
+    }
+
+    sub vcl_recv {
+        if (req.http.X-Use-Config == "yes") {
+            set req.http.X-Wasm-Result =
+                wasm.proxy_wasm_on_request_configured("filter",
+                    "vm-config-test", "plugin-config-test");
+        } else {
+            set req.http.X-Wasm-Result =
+                wasm.proxy_wasm_on_request("filter");
+        }
+        if (req.http.X-Wasm-Result != "0") {
+            return (synth(403, "Blocked"));
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+        if (req.http.X-Use-Config == "yes") {
+            set resp.http.X-Wasm-Resp =
+                wasm.proxy_wasm_on_response_configured("filter",
+                    "", "response-plugin-config");
+        }
+    }
+} -start
+
+# 1. Basic request — filter adds X-Wasm-Filter header
+client c1 {
+    txreq -url "/test" -hdr "User-Agent: Mozilla/5.0"
+    rxresp
+    expect resp.status == 200
+} -run
+
+# 2. Configured request with response phase
+client c2 {
+    txreq -url "/test" -hdr "User-Agent: Chrome/120" \
+        -hdr "X-Use-Config: yes"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "0"
+    expect resp.http.X-Wasm-Resp == "0"
+} -run
+
+# 3. BadBot gets blocked
+client c3 {
+    txreq -url "/evil" -hdr "User-Agent: BadBot/2.0" \
+        -hdr "X-Use-Config: yes"
+    rxresp
+    expect resp.status == 403
+} -run

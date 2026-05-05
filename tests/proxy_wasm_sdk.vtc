@@ -1,0 +1,45 @@
+varnishtest "vmod-wasm: Proxy-Wasm SDK filter — request and response"
+
+server s1 {
+    rxreq
+    expect req.http.X-Wasm-SDK == "request-processed"
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("sdk", "${sdk_module}");
+        wasm.set_fuel(100000000);
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request("sdk");
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(403, "Blocked by SDK filter"));
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Resp-Action =
+            wasm.proxy_wasm_on_response("sdk");
+    }
+} -start
+
+# Normal request should pass and get response header
+client c1 {
+    txreq -url "/test" -hdr "User-Agent: Chrome/120"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-SDK-Response == "processed"
+    expect resp.http.X-Wasm-Resp-Action == "0"
+} -run
+
+# BadBot should be blocked
+client c2 {
+    txreq -url "/" -hdr "User-Agent: EvilBadBot/1.0"
+    rxresp
+    expect resp.status == 403
+} -run

@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+#include <time.h>
 
 #include <wasm.h>
 #include <wasmtime.h>
@@ -22,8 +22,10 @@
 #include "wasm_engine.h"
 #include "host_functions.h"
 #include "proxy_wasm.h"
+#include "proxy_wasm_shared.h"
 
 #define MAX_MODULES 64
+#define VWASM_MAX_BODY_CACHE	(1024 * 1024)  /* 1 MiB max body to cache */
 
 struct wasm_module_entry {
 	char			*name;
@@ -36,10 +38,16 @@ struct vwasm_engine {
 	wasmtime_linker_t	*linker;
 	struct wasm_module_entry	modules[MAX_MODULES];
 	int			nmodules;
-	pthread_rwlock_t	rwlock;
-	/* Execution limits (atomic access via rwlock) */
+	/* Execution limits (set once in vcl_init, immutable after) */
 	uint64_t		fuel_limit;
 	size_t			memory_limit;
+	/* Security configuration */
+	char			**allowed_upstreams;
+	uint32_t		num_allowed_upstreams;
+	uint32_t		http_call_max;
+	int			fail_mode;
+	/* Execution statistics */
+	struct vwasm_stats	stats;
 };
 
 struct vwasm_engine *
@@ -92,10 +100,13 @@ vwasm_engine_new(void)
 		return (NULL);
 	}
 
-	pthread_rwlock_init(&e->rwlock, NULL);
 	e->nmodules = 0;
 	e->fuel_limit = VWASM_DEFAULT_FUEL;
 	e->memory_limit = VWASM_DEFAULT_MEMLIMIT;
+	e->allowed_upstreams = NULL;
+	e->num_allowed_upstreams = 0;
+	e->http_call_max = VWASM_DEFAULT_HTTP_CALL_MAX;
+	e->fail_mode = VWASM_FAIL_CLOSED;
 
 	return (e);
 }
@@ -120,7 +131,14 @@ vwasm_engine_destroy(struct vwasm_engine **enginep)
 
 	wasmtime_linker_delete(e->linker);
 	wasm_engine_delete(e->engine);
-	pthread_rwlock_destroy(&e->rwlock);
+
+	/* Free allowed upstreams list */
+	if (e->allowed_upstreams != NULL) {
+		for (i = 0; i < (int)e->num_allowed_upstreams; i++)
+			free(e->allowed_upstreams[i]);
+		free(e->allowed_upstreams);
+	}
+
 	free(e);
 }
 
@@ -133,9 +151,7 @@ vwasm_engine_set_fuel(struct vwasm_engine *engine, uint64_t fuel)
 {
 	if (engine == NULL)
 		return;
-	pthread_rwlock_wrlock(&engine->rwlock);
 	engine->fuel_limit = fuel;
-	pthread_rwlock_unlock(&engine->rwlock);
 }
 
 void
@@ -143,35 +159,153 @@ vwasm_engine_set_memory_limit(struct vwasm_engine *engine, size_t bytes)
 {
 	if (engine == NULL)
 		return;
-	pthread_rwlock_wrlock(&engine->rwlock);
 	engine->memory_limit = bytes;
-	pthread_rwlock_unlock(&engine->rwlock);
 }
 
 uint64_t
 vwasm_engine_get_fuel(struct vwasm_engine *engine)
 {
-	uint64_t f;
-
 	if (engine == NULL)
 		return (VWASM_DEFAULT_FUEL);
-	pthread_rwlock_rdlock(&engine->rwlock);
-	f = engine->fuel_limit;
-	pthread_rwlock_unlock(&engine->rwlock);
-	return (f);
+	return (engine->fuel_limit);
 }
 
 size_t
 vwasm_engine_get_memory_limit(struct vwasm_engine *engine)
 {
-	size_t m;
-
 	if (engine == NULL)
 		return (VWASM_DEFAULT_MEMLIMIT);
-	pthread_rwlock_rdlock(&engine->rwlock);
-	m = engine->memory_limit;
-	pthread_rwlock_unlock(&engine->rwlock);
-	return (m);
+	return (engine->memory_limit);
+}
+
+/* ----------------------------------------------------------------
+ * Security configuration setters/getters
+ * ---------------------------------------------------------------- */
+
+void
+vwasm_engine_set_allowed_upstreams(struct vwasm_engine *engine,
+    const char *upstream_list)
+{
+	char *dup, *tok, *saveptr;
+	uint32_t count, i;
+	char **new_list;
+
+	if (engine == NULL)
+		return;
+
+	/* Free existing list */
+	if (engine->allowed_upstreams != NULL) {
+		for (i = 0; i < engine->num_allowed_upstreams; i++)
+			free(engine->allowed_upstreams[i]);
+		free(engine->allowed_upstreams);
+		engine->allowed_upstreams = NULL;
+		engine->num_allowed_upstreams = 0;
+	}
+
+	/* Empty or NULL means "allow all" */
+	if (upstream_list == NULL || *upstream_list == '\0')
+		return;
+
+	/* Count tokens */
+	dup = strdup(upstream_list);
+	if (dup == NULL)
+		return;
+
+	count = 0;
+	tok = strtok_r(dup, ",", &saveptr);
+	while (tok != NULL) {
+		while (*tok == ' ' || *tok == '\t')
+			tok++;
+		if (*tok != '\0')
+			count++;
+		tok = strtok_r(NULL, ",", &saveptr);
+	}
+	free(dup);
+
+	if (count == 0)
+		return;
+
+	new_list = calloc(count, sizeof(char *));
+	if (new_list == NULL)
+		return;
+
+	/* Parse again to fill list */
+	dup = strdup(upstream_list);
+	if (dup == NULL) {
+		free(new_list);
+		return;
+	}
+
+	i = 0;
+	tok = strtok_r(dup, ",", &saveptr);
+	while (tok != NULL && i < count) {
+		while (*tok == ' ' || *tok == '\t')
+			tok++;
+		if (*tok != '\0') {
+			new_list[i] = strdup(tok);
+			if (new_list[i] == NULL) {
+				uint32_t j;
+				for (j = 0; j < i; j++)
+					free(new_list[j]);
+				free(new_list);
+				free(dup);
+				return;
+			}
+			/* Trim trailing whitespace */
+			size_t len = strlen(new_list[i]);
+			while (len > 0 &&
+			    (new_list[i][len-1] == ' ' ||
+			     new_list[i][len-1] == '\t'))
+				new_list[i][--len] = '\0';
+			i++;
+		}
+		tok = strtok_r(NULL, ",", &saveptr);
+	}
+	free(dup);
+
+	engine->allowed_upstreams = new_list;
+	engine->num_allowed_upstreams = i;
+}
+
+void
+vwasm_engine_set_http_call_max(struct vwasm_engine *engine, uint32_t max_calls)
+{
+	if (engine == NULL)
+		return;
+	engine->http_call_max = max_calls;
+}
+
+void
+vwasm_engine_set_fail_mode(struct vwasm_engine *engine, int mode)
+{
+	if (engine == NULL)
+		return;
+	engine->fail_mode = (mode == VWASM_FAIL_OPEN) ?
+	    VWASM_FAIL_OPEN : VWASM_FAIL_CLOSED;
+}
+
+int
+vwasm_engine_get_fail_mode(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (VWASM_FAIL_CLOSED);
+	return (engine->fail_mode);
+}
+
+uint32_t
+vwasm_engine_get_http_call_max(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (VWASM_DEFAULT_HTTP_CALL_MAX);
+	return (engine->http_call_max);
+}
+
+struct vwasm_stats *
+vwasm_engine_get_stats(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (NULL);
+	return (&engine->stats);
 }
 
 /* ----------------------------------------------------------------
@@ -277,9 +411,7 @@ vwasm_engine_load_module(struct vwasm_engine *engine,
 	}
 
 	/* Store the module */
-	pthread_rwlock_wrlock(&engine->rwlock);
 	if (engine->nmodules >= MAX_MODULES) {
-		pthread_rwlock_unlock(&engine->rwlock);
 		wasmtime_module_delete(module);
 		return (-1);
 	}
@@ -288,7 +420,6 @@ vwasm_engine_load_module(struct vwasm_engine *engine,
 	error = wasmtime_linker_instantiate_pre(engine->linker, module,
 	    &engine->modules[engine->nmodules].instance_pre);
 	if (error != NULL) {
-		pthread_rwlock_unlock(&engine->rwlock);
 		wasmtime_error_delete(error);
 		wasmtime_module_delete(module);
 		return (-1);
@@ -298,7 +429,6 @@ vwasm_engine_load_module(struct vwasm_engine *engine,
 	engine->modules[engine->nmodules].module = module;
 	engine->nmodules++;
 	ret = 0;
-	pthread_rwlock_unlock(&engine->rwlock);
 
 	return (ret);
 }
@@ -338,15 +468,11 @@ vwasm_engine_call(struct vwasm_engine *engine,
 		return (-1);
 
 	/* Read current limits */
-	pthread_rwlock_rdlock(&engine->rwlock);
 	fuel_limit = engine->fuel_limit;
 	mem_limit = engine->memory_limit;
-	pthread_rwlock_unlock(&engine->rwlock);
 
 	/* Find the pre-compiled module */
-	pthread_rwlock_rdlock(&engine->rwlock);
 	entry = find_module(engine, module_name);
-	pthread_rwlock_unlock(&engine->rwlock);
 
 	if (entry == NULL)
 		return (-1);
@@ -456,10 +582,20 @@ call_wasm_func(wasmtime_context_t *context, wasmtime_instance_t *instance,
 	error = wasmtime_func_call(context, &item.of.func,
 	    args, nargs, results, 1, &trap);
 	if (error != NULL) {
+		wasm_message_t msg;
+		wasmtime_error_message(error, &msg);
+		fprintf(stderr, "WASM ERROR in %s: %.*s\n",
+		    func_name, (int)msg.size, msg.data);
+		wasm_byte_vec_delete(&msg);
 		wasmtime_error_delete(error);
 		return (-1);
 	}
 	if (trap != NULL) {
+		wasm_message_t msg;
+		wasm_trap_message(trap, &msg);
+		fprintf(stderr, "WASM TRAP in %s: %.*s\n",
+		    func_name, (int)msg.size, msg.data);
+		wasm_byte_vec_delete(&msg);
 		wasm_trap_delete(trap);
 		return (-1);
 	}
@@ -487,10 +623,20 @@ call_wasm_void(wasmtime_context_t *context, wasmtime_instance_t *instance,
 	error = wasmtime_func_call(context, &item.of.func,
 	    args, nargs, NULL, 0, &trap);
 	if (error != NULL) {
+		wasm_message_t msg;
+		wasmtime_error_message(error, &msg);
+		fprintf(stderr, "WASM ERROR in %s: %.*s\n",
+		    func_name, (int)msg.size, msg.data);
+		wasm_byte_vec_delete(&msg);
 		wasmtime_error_delete(error);
 		return (-1);
 	}
 	if (trap != NULL) {
+		wasm_message_t msg;
+		wasm_trap_message(trap, &msg);
+		fprintf(stderr, "WASM TRAP in %s: %.*s\n",
+		    func_name, (int)msg.size, msg.data);
+		wasm_byte_vec_delete(&msg);
 		wasm_trap_delete(trap);
 		return (-1);
 	}
@@ -498,16 +644,45 @@ call_wasm_void(wasmtime_context_t *context, wasmtime_instance_t *instance,
 }
 
 /* ----------------------------------------------------------------
- * Proxy-Wasm lifecycle execution for HTTP request filtering.
+ * Proxy-Wasm unified lifecycle execution.
  *
- * Runs the Proxy-Wasm callback sequence and returns the action
- * from proxy_on_request_headers, or -1 on error.
+ * Runs the full ABI v0.2.1 callback sequence for either request or
+ * response phase, with optional vm_config and plugin_config.
+ * Returns the action from proxy_on_{request,response}_headers,
+ * or -1 on error.
  * ---------------------------------------------------------------- */
 
-int
-vwasm_proxy_wasm_call(struct vwasm_engine *engine,
+#define VWASM_PHASE_REQUEST  0
+#define VWASM_PHASE_RESPONSE 1
+
+/* Callback for VRB_Iterate: collects body chunks into a flat buffer */
+struct body_collect {
+	uint8_t		*buf;
+	size_t		 len;
+	size_t		 cap;
+};
+
+static int
+body_collect_cb(void *priv, unsigned flush, const void *ptr, ssize_t len)
+{
+	struct body_collect *bc;
+
+	(void)flush;
+	bc = (struct body_collect *)priv;
+	if (len <= 0)
+		return (0);
+	if (bc->len + (size_t)len > bc->cap)
+		return (-1);
+	memcpy(bc->buf + bc->len, ptr, (size_t)len);
+	bc->len += (size_t)len;
+	return (0);
+}
+
+static int
+proxy_wasm_execute(struct vwasm_engine *engine,
     const struct vrt_ctx *ctx,
-    const char *module_name,
+    const char *module_name, int phase,
+    const char *vm_config, const char *plugin_config,
     int *status_code)
 {
 	struct wasm_module_entry *entry;
@@ -524,22 +699,33 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 	size_t mem_limit;
 	int ret = -1;
 	int num_headers;
+	const struct http *hp;
+	size_t vm_config_len;
+	size_t plugin_config_len;
+	const char *phase_headers_fn;
+	const char *phase_body_fn;
+	struct timespec ts_start, ts_end;
+	long elapsed_ms;
 
 	if (engine == NULL || module_name == NULL || status_code == NULL)
 		return (-1);
 
 	*status_code = 0;
+	vm_config_len = (vm_config != NULL) ? strlen(vm_config) : 0;
+	plugin_config_len = (plugin_config != NULL) ? strlen(plugin_config) : 0;
+
+	phase_headers_fn = (phase == VWASM_PHASE_REQUEST) ?
+	    "proxy_on_request_headers" : "proxy_on_response_headers";
+	phase_body_fn = (phase == VWASM_PHASE_REQUEST) ?
+	    "proxy_on_request_body" : "proxy_on_response_body";
 
 	/* Read current limits */
-	pthread_rwlock_rdlock(&engine->rwlock);
+	/* Read current limits */
 	fuel_limit = engine->fuel_limit;
 	mem_limit = engine->memory_limit;
-	pthread_rwlock_unlock(&engine->rwlock);
 
 	/* Find the pre-compiled module */
-	pthread_rwlock_rdlock(&engine->rwlock);
 	entry = find_module(engine, module_name);
-	pthread_rwlock_unlock(&engine->rwlock);
 
 	if (entry == NULL)
 		return (-1);
@@ -547,14 +733,22 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 	/* Set up proxy-wasm context */
 	memset(&proxy_ctx, 0, sizeof(proxy_ctx));
 	proxy_ctx.vrt_ctx = ctx;
-	proxy_ctx.memory_valid = 0;
-	proxy_ctx.allocator_valid = 0;
 	proxy_ctx.root_context_id = 1;
 	proxy_ctx.stream_context_id = 2;
-	proxy_ctx.local_response_set = 0;
-	proxy_ctx.local_response_code = 0;
+	proxy_ctx.module_name = module_name;
+	proxy_ctx.vm_config = vm_config;
+	proxy_ctx.vm_config_len = vm_config_len;
+	proxy_ctx.plugin_config = plugin_config;
+	proxy_ctx.plugin_config_len = plugin_config_len;
+	proxy_ctx.shared_data = vwasm_proxy_wasm_get_shared_data();
+	proxy_ctx.queue_store = vwasm_proxy_wasm_get_queue_store();
+	proxy_ctx.metric_store = vwasm_proxy_wasm_get_metric_store();
+	proxy_ctx.http_call_max = engine->http_call_max;
+	proxy_ctx.allowed_upstreams = (const char **)engine->allowed_upstreams;
+	proxy_ctx.num_allowed_upstreams = engine->num_allowed_upstreams;
 
 	/* Create a per-call store with proxy context as data */
+	clock_gettime(CLOCK_MONOTONIC, &ts_start);
 	store = wasmtime_store_new(engine->engine, &proxy_ctx, NULL);
 	if (store == NULL)
 		return (-1);
@@ -566,7 +760,7 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 	wasmtime_context_set_fuel(context, fuel_limit);
 	wasmtime_store_limiter(store, (int64_t)mem_limit, -1, -1, -1, -1);
 
-	/* Instantiate from pre-validated instance (skips import resolution) */
+	/* Instantiate from pre-validated instance */
 	error = wasmtime_instance_pre_instantiate(entry->instance_pre,
 	    context, &instance, &trap);
 	if (error != NULL) {
@@ -585,45 +779,43 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 		proxy_ctx.memory_valid = 1;
 	}
 
-	/* Resolve "proxy_on_memory_allocate" export (for returning strings) */
+	/* Resolve allocator */
 	if (wasmtime_instance_export_get(context, &instance,
 	    "proxy_on_memory_allocate", 24, &item) &&
 	    item.kind == WASMTIME_EXTERN_FUNC) {
 		proxy_ctx.allocator = item.of.func;
 		proxy_ctx.allocator_valid = 1;
+	} else if (wasmtime_instance_export_get(context, &instance,
+	    "malloc", 6, &item) &&
+	    item.kind == WASMTIME_EXTERN_FUNC) {
+		proxy_ctx.allocator = item.of.func;
+		proxy_ctx.allocator_valid = 1;
 	}
 
-	/*
-	 * Proxy-Wasm lifecycle sequence:
-	 *
-	 * 1. proxy_on_context_create(root_id=1, parent_id=0)
-	 * 2. proxy_on_vm_start(0, vm_config_size=0)
-	 * 3. proxy_on_configure(root_id=1, plugin_config_size=0)
-	 * 4. proxy_on_context_create(stream_id=2, root_id=1)
-	 * 5. proxy_on_request_headers(stream_id=2, num_headers, end_of_stream=1)
-	 */
+	/* Call _initialize if exported */
+	call_wasm_void(context, &instance, "_initialize", NULL, 0);
 
 	/* 1. Create root context */
 	args[0].kind = WASMTIME_I32;
 	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
 	args[1].kind = WASMTIME_I32;
-	args[1].of.i32 = 0; /* no parent */
+	args[1].of.i32 = 0;
 	call_wasm_void(context, &instance,
 	    "proxy_on_context_create", args, 2);
 
-	/* 2. VM start (unused=0, vm_config_size=0) */
-	args[0].kind = WASMTIME_I32;
-	args[0].of.i32 = 0;
-	args[1].kind = WASMTIME_I32;
-	args[1].of.i32 = 0;
-	call_wasm_func(context, &instance,
-	    "proxy_on_vm_start", args, 2, NULL);
-
-	/* 3. Configure root context */
+	/* 2. VM start */
 	args[0].kind = WASMTIME_I32;
 	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
 	args[1].kind = WASMTIME_I32;
-	args[1].of.i32 = 0; /* no plugin config */
+	args[1].of.i32 = (int32_t)vm_config_len;
+	call_wasm_func(context, &instance,
+	    "proxy_on_vm_start", args, 2, NULL);
+
+	/* 3. Configure */
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
+	args[1].kind = WASMTIME_I32;
+	args[1].of.i32 = (int32_t)plugin_config_len;
 	call_wasm_func(context, &instance,
 	    "proxy_on_configure", args, 2, NULL);
 
@@ -635,22 +827,26 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 	call_wasm_void(context, &instance,
 	    "proxy_on_context_create", args, 2);
 
-	/* 5. Call on_request_headers */
-	num_headers = 0;
-	if (ctx->http_req != NULL)
-		num_headers = ctx->http_req->nhd - HTTP_HDR_FIRST;
+	/* 5. Call phase-specific headers callback */
+	if (phase == VWASM_PHASE_REQUEST) {
+		hp = ctx->http_req;
+	} else {
+		hp = (ctx->http_beresp != NULL) ?
+		    ctx->http_beresp : ctx->http_resp;
+	}
+	num_headers = (hp != NULL) ? hp->nhd - HTTP_HDR_FIRST : 0;
 
 	args[0].kind = WASMTIME_I32;
 	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
 	args[1].kind = WASMTIME_I32;
 	args[1].of.i32 = num_headers;
 	args[2].kind = WASMTIME_I32;
-	args[2].of.i32 = 1; /* end_of_stream = true */
+	args[2].of.i32 = 1; /* end_of_stream */
 
 	action = 0;
 	if (call_wasm_func(context, &instance,
-	    "proxy_on_request_headers", args, 3, &action) != 0) {
-		log_error(ctx, NULL, module_name, "proxy_on_request_headers");
+	    phase_headers_fn, args, 3, &action) != 0) {
+		log_error(ctx, NULL, module_name, phase_headers_fn);
 		goto cleanup;
 	}
 
@@ -661,14 +857,136 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 		goto cleanup;
 	}
 
+	/* 6. Body callback — pass actual body if available */
+	if (phase == VWASM_PHASE_REQUEST && ctx->req != NULL) {
+		VCL_BYTES cached_size;
+		cached_size = VRT_CacheReqBody(ctx, VWASM_MAX_BODY_CACHE);
+		if (cached_size > 0) {
+			struct body_collect bc;
+			bc.buf = malloc((size_t)cached_size);
+			if (bc.buf != NULL) {
+				bc.len = 0;
+				bc.cap = (size_t)cached_size;
+				if (VRB_Iterate(ctx->req->wrk,
+				    ctx->req->vsl, ctx->req,
+				    body_collect_cb, &bc) >= 0 &&
+				    bc.len > 0) {
+					proxy_ctx.request_body = bc.buf;
+					proxy_ctx.request_body_len = bc.len;
+				} else {
+					free(bc.buf);
+				}
+			}
+		}
+	}
+
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
+	args[1].kind = WASMTIME_I32;
+	args[1].of.i32 = (int32_t)(phase == VWASM_PHASE_REQUEST ?
+	    proxy_ctx.request_body_len : proxy_ctx.response_body_len);
+	args[2].kind = WASMTIME_I32;
+	args[2].of.i32 = 1;
+	call_wasm_func(context, &instance, phase_body_fn, args, 3, NULL);
+
+	/* 7. proxy_on_log */
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
+	call_wasm_void(context, &instance, "proxy_on_log", args, 1);
+
+	/* 8. proxy_on_done */
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
+	call_wasm_func(context, &instance, "proxy_on_done", args, 1, NULL);
+
+	/* 9. proxy_on_delete */
+	args[0].kind = WASMTIME_I32;
+	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
+	call_wasm_void(context, &instance, "proxy_on_delete", args, 1);
+
 	*status_code = 0;
 	ret = (int)action;
 
 cleanup:
+	clock_gettime(CLOCK_MONOTONIC, &ts_end);
+	elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000L +
+	    (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000L;
+	if (elapsed_ms > 10) {
+		VSLb(ctx->req != NULL ? ctx->req->vsl :
+		    (ctx->bo != NULL ? ctx->bo->vsl : NULL),
+		    SLT_VCL_Log,
+		    "vmod-wasm: %s execution took %ldms",
+		    module_name, elapsed_ms);
+	}
+
+	/* Update execution statistics (atomic, thread-safe) */
+	__sync_fetch_and_add(&engine->stats.calls_total, 1);
+	if (ret >= 0)
+		__sync_fetch_and_add(&engine->stats.calls_ok, 1);
+	else
+		__sync_fetch_and_add(&engine->stats.calls_error, 1);
+	if (elapsed_ms > 10)
+		__sync_fetch_and_add(&engine->stats.calls_timeout, 1);
+	if (proxy_ctx.local_response_set)
+		__sync_fetch_and_add(&engine->stats.local_responses, 1);
+	if (proxy_ctx.http_call_count > 0)
+		__sync_fetch_and_add(&engine->stats.http_calls,
+		    proxy_ctx.http_call_count);
+	if (proxy_ctx.request_body_len > 0)
+		__sync_fetch_and_add(&engine->stats.body_bytes_in,
+		    proxy_ctx.request_body_len);
+
+	vwasm_proxy_ctx_cleanup(&proxy_ctx);
 	if (error != NULL)
 		wasmtime_error_delete(error);
 	if (trap != NULL)
 		wasm_trap_delete(trap);
 	wasmtime_store_delete(store);
 	return (ret);
+}
+
+/* Public API: thin wrappers around proxy_wasm_execute */
+
+int
+vwasm_proxy_wasm_call(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char *module_name,
+    int *status_code)
+{
+	return (proxy_wasm_execute(engine, ctx, module_name,
+	    VWASM_PHASE_REQUEST, NULL, NULL, status_code));
+}
+
+int
+vwasm_proxy_wasm_response_call(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char *module_name,
+    int *status_code)
+{
+	return (proxy_wasm_execute(engine, ctx, module_name,
+	    VWASM_PHASE_RESPONSE, NULL, NULL, status_code));
+}
+
+int
+vwasm_proxy_wasm_call_with_config(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char *module_name,
+    const char *vm_config,
+    const char *plugin_config,
+    int *status_code)
+{
+	return (proxy_wasm_execute(engine, ctx, module_name,
+	    VWASM_PHASE_REQUEST, vm_config, plugin_config, status_code));
+}
+
+int
+vwasm_proxy_wasm_response_call_with_config(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char *module_name,
+    const char *vm_config,
+    const char *plugin_config,
+    int *status_code)
+{
+	return (proxy_wasm_execute(engine, ctx, module_name,
+	    VWASM_PHASE_RESPONSE, vm_config, plugin_config, status_code));
 }

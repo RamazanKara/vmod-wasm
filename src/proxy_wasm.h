@@ -4,7 +4,7 @@
  *
  * Proxy-Wasm ABI types and host function registration.
  *
- * Implements a subset of the Proxy-Wasm ABI v0.2.1 for HTTP filtering.
+ * Full implementation of the Proxy-Wasm ABI v0.2.1 for HTTP filtering.
  * See: https://github.com/proxy-wasm/spec
  */
 
@@ -35,8 +35,10 @@ typedef enum {
 	PROXY_PARSE_FAILURE   = 4,
 	PROXY_BAD_EXPRESSION  = 5,
 	PROXY_INVALID_OP      = 6,
-	PROXY_UNIMPLEMENTED   = 12,
+	PROXY_EMPTY           = 7,
+	PROXY_CAS_MISMATCH    = 8,
 	PROXY_INTERNAL        = 10,
+	PROXY_UNIMPLEMENTED   = 12,
 } proxy_status_t;
 
 typedef enum {
@@ -62,6 +64,59 @@ typedef enum {
 	PROXY_BUFFER_PLUGIN_CONFIG      = 7,
 } proxy_buffer_type_t;
 
+typedef enum {
+	PROXY_STREAM_TYPE_HTTP_REQUEST  = 0,
+	PROXY_STREAM_TYPE_HTTP_RESPONSE = 1,
+	PROXY_STREAM_TYPE_DOWNSTREAM    = 2,
+	PROXY_STREAM_TYPE_UPSTREAM      = 3,
+} proxy_stream_type_t;
+
+typedef enum {
+	PROXY_METRIC_COUNTER   = 0,
+	PROXY_METRIC_GAUGE     = 1,
+	PROXY_METRIC_HISTOGRAM = 2,
+} proxy_metric_type_t;
+
+/* Forward declarations */
+struct vwasm_shared_data;
+struct vwasm_queue_store;
+struct vwasm_metric_store;
+
+/* ----------------------------------------------------------------
+ * Metric store — thread-safe counter/gauge/histogram storage
+ * ---------------------------------------------------------------- */
+
+#define VWASM_MAX_METRICS	256
+#define VWASM_METRIC_MAX_NAME	128
+
+struct vwasm_metric {
+	char		name[VWASM_METRIC_MAX_NAME];
+	uint32_t	name_len;
+	proxy_metric_type_t type;
+	uint64_t	value;
+};
+
+struct vwasm_metric_store {
+	pthread_rwlock_t	rwlock;
+	struct vwasm_metric	metrics[VWASM_MAX_METRICS];
+	uint32_t		count;
+};
+
+/* ----------------------------------------------------------------
+ * HTTP call response buffer — stores response for callback
+ * ---------------------------------------------------------------- */
+
+struct vwasm_http_call_response {
+	uint8_t		*raw_buf;	/* Raw response buffer (owns memory) */
+	size_t		 raw_len;
+	uint8_t		*headers_buf;	/* Pointer into raw_buf */
+	size_t		 headers_len;
+	uint32_t	 num_headers;
+	uint8_t		*body;		/* Pointer into raw_buf */
+	size_t		 body_len;
+	int		 valid;
+};
+
 /* ----------------------------------------------------------------
  * Proxy-Wasm execution context
  *
@@ -78,12 +133,76 @@ struct vwasm_proxy_ctx {
 	int			 allocator_valid;
 	uint32_t		 root_context_id;
 	uint32_t		 stream_context_id;
+	const char		*module_name;
+
 	/* Local response for send_local_response */
 	int			 local_response_set;
 	int32_t			 local_response_code;
+	char			*local_response_body;
+	size_t			 local_response_body_len;
+	char			*local_response_headers;
+	size_t			 local_response_headers_len;
+
+	/* VM and plugin configuration */
+	const char		*vm_config;
+	size_t			 vm_config_len;
+	const char		*plugin_config;
+	size_t			 plugin_config_len;
+
+	/* Tick period (milliseconds, 0 = disabled) */
+	uint32_t		 tick_period_ms;
+
+	/* Stream continuation state */
+	int			 paused;
+
+	/* Last status for proxy_get_status */
+	uint32_t		 last_status_code;
+	const char		*last_status_msg;
+
+	/* Done flag */
+	int			 done;
+
+	/* Shared data store (global, not per-ctx) */
+	struct vwasm_shared_data	*shared_data;
+
+	/* Shared queue store (global, not per-ctx) */
+	struct vwasm_queue_store	*queue_store;
+
+	/* Metric store (global, not per-ctx) */
+	struct vwasm_metric_store *metric_store;
+
+	/* HTTP call response (for proxy_on_http_call_response) */
+	struct vwasm_http_call_response http_response;
+
+	/* HTTP request/response body access */
+	const uint8_t		*request_body;
+	size_t			 request_body_len;
+	const uint8_t		*response_body;
+	size_t			 response_body_len;
+	/* Modified body (if module called set_buffer_bytes on body) */
+	uint8_t			*modified_body;
+	size_t			 modified_body_len;
+	int			 body_modified;
+
+	/* HTTP callout rate limiting */
+	uint32_t		 http_call_count;
+	uint32_t		 http_call_max;
+
+	/* Upstream allowlist (NULL = allow all, for backwards compat) */
+	const char		**allowed_upstreams;
+	uint32_t		 num_allowed_upstreams;
 };
 
 /* Register all Proxy-Wasm host functions with the linker */
 int vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker);
+
+/* Cleanup proxy context resources (call after lifecycle completes) */
+void vwasm_proxy_ctx_cleanup(struct vwasm_proxy_ctx *ctx);
+
+/* Global shared state (initialized once, shared across all calls) */
+struct vwasm_shared_data *vwasm_proxy_wasm_get_shared_data(void);
+struct vwasm_queue_store *vwasm_proxy_wasm_get_queue_store(void);
+struct vwasm_metric_store *vwasm_proxy_wasm_get_metric_store(void);
+void vwasm_proxy_wasm_destroy_shared(void);
 
 #endif /* VWASM_PROXY_WASM_H */

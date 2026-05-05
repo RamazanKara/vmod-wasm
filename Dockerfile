@@ -47,10 +47,14 @@ WORKDIR /src
 
 COPY . .
 
-# Build the test Wasm module
+# Build the test Wasm module (raw ABI)
 RUN cd examples/rust && cargo build --release \
     && mkdir -p /src/tests/wasm \
     && cp target/wasm32-unknown-unknown/release/test_module.wasm /src/tests/wasm/
+
+# Build the proxy-wasm SDK test module
+RUN cd examples/proxy-wasm-filter && cargo build --release \
+    && cp target/wasm32-unknown-unknown/release/proxy_wasm_filter.wasm /src/tests/wasm/
 
 # Build the VMOD
 RUN chmod +x autogen.sh \

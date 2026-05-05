@@ -7,90 +7,44 @@ $Event vmod_event
 DESCRIPTION
 ===========
 
-This VMOD embeds a WebAssembly runtime (Wasmtime) into Varnish,
-allowing you to load and execute Wasm modules for request/response
-processing.
+Embeds a WebAssembly runtime (Wasmtime) into Varnish for
+request/response filtering via Proxy-Wasm ABI v0.2.1.
 
 $Function VOID load(STRING name, STRING path)
 
 $Restrict vcl_init
 
-Load a Wasm module from disk. The module is compiled once at VCL
-init time and can be instantiated cheaply per-request.
+Load and compile a .wasm module. Example::
 
-Arguments:
-    name: A unique identifier for this module (used in execute calls)
-    path: Absolute path to the .wasm file
-
-Example::
-
-    sub vcl_init {
-        wasm.load("my_filter", "/etc/varnish/wasm/filter.wasm");
-    }
+    wasm.load("filter", "/etc/varnish/wasm/filter.wasm");
 
 $Function INT execute(STRING name, STRING function)
 
 $Restrict client
 
-Execute an exported function from a loaded Wasm module.
-Returns the integer result of the Wasm function.
+Call an exported function (non-proxy-wasm path). Returns i32 result. Example::
 
-Arguments:
-    name: The module identifier (as passed to load())
-    function: The exported function name to call
-
-Example::
-
-    sub vcl_recv {
-        if (wasm.execute("my_filter", "on_request") == 403) {
-            return (synth(403, "Blocked by Wasm filter"));
-        }
-    }
+    if (wasm.execute("mod", "check") == 403) { return (synth(403)); }
 
 $Function STRING version()
 
 Return the vmod-wasm version string.
 
-Example::
-
-    std.log("vmod-wasm version: " + wasm.version());
-
 $Function VOID set_fuel(INT fuel)
 
 $Restrict vcl_init
 
-Set the fuel (instruction) limit for Wasm execution. Higher values
-allow more complex computations. Default is 1000000.
+Max instruction fuel per execution. Default 1000000. Example::
 
-Must be called from vcl_init.
-
-Arguments:
-    fuel: Maximum fuel units per execution
-
-Example::
-
-    sub vcl_init {
-        wasm.set_fuel(500000);
-    }
+    wasm.set_fuel(500000);
 
 $Function VOID set_memory_limit(INT limit)
 
 $Restrict vcl_init
 
-Set the maximum linear memory size for Wasm modules in bytes. If a
-module tries to grow memory beyond this limit, the operation fails.
-Default is 16777216 (16 MiB).
+Max Wasm linear memory in bytes. Default 16 MiB. Example::
 
-Must be called from vcl_init.
-
-Arguments:
-    limit: Maximum memory in bytes
-
-Example::
-
-    sub vcl_init {
-        wasm.set_memory_limit(8388608);
-    }
+    wasm.set_memory_limit(8388608);
 
 $Function INT get_fuel()
 
@@ -104,23 +58,68 @@ $Function INT proxy_wasm_on_request(STRING module)
 
 $Restrict client
 
-Execute a Proxy-Wasm filter module for the current HTTP request.
+Run Proxy-Wasm request lifecycle. Returns 0 (continue), >0 (local response status), or -1 (error). Example::
 
-Runs the full Proxy-Wasm lifecycle (context create, vm_start,
-configure, request_headers) and returns:
-  - 0: CONTINUE (allow the request)
-  - >0: HTTP status code from send_local_response (e.g. 403)
-  - -1: execution error
+    set req.http.X-Wasm = wasm.proxy_wasm_on_request("filter");
 
-The module must export Proxy-Wasm ABI functions:
-  proxy_on_context_create, proxy_on_vm_start, proxy_on_configure,
-  proxy_on_request_headers, proxy_on_memory_allocate, memory.
+$Function INT proxy_wasm_on_response(STRING module)
 
-Example::
+$Restrict vcl_backend_response vcl_deliver
 
-    sub vcl_recv {
-        set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request("filter");
-        if (req.http.X-Wasm-Action != "0") {
-            return (synth(403, "Blocked"));
-        }
-    }
+Run Proxy-Wasm response lifecycle. Same return semantics. Example::
+
+    set resp.http.X-Wasm = wasm.proxy_wasm_on_response("filter");
+
+$Function INT proxy_wasm_on_request_configured(STRING module, STRING vm_config, STRING plugin_config)
+
+$Restrict client
+
+Like proxy_wasm_on_request but passes vm_config/plugin_config to the module. Example::
+
+    set req.http.X-Wasm = wasm.proxy_wasm_on_request_configured(
+        "filter", "{}", "{\"block\": \"/admin\"}");
+
+$Function INT proxy_wasm_on_response_configured(STRING module, STRING vm_config, STRING plugin_config)
+
+$Restrict vcl_backend_response vcl_deliver
+
+Like proxy_wasm_on_response but passes vm_config/plugin_config to the module. Example::
+
+    set resp.http.X-Wasm = wasm.proxy_wasm_on_response_configured(
+        "filter", "", "{\"add_header\": \"X-Filtered\"}");
+
+$Function VOID set_allowed_upstreams(STRING upstream_list)
+
+$Restrict vcl_init
+
+Comma-separated "host:port" allowlist for proxy_http_call (SSRF prevention). Example::
+
+    wasm.set_allowed_upstreams("api.internal:8080,auth.svc:443");
+
+$Function VOID set_http_call_limit(INT limit)
+
+$Restrict vcl_init
+
+Max HTTP callouts per request. Default 5, 0 disables. Example::
+
+    wasm.set_http_call_limit(3);
+
+$Function VOID set_fail_mode(STRING mode)
+
+$Restrict vcl_init
+
+"closed" (default): errors return -1. "open": errors return 0. Example::
+
+    wasm.set_fail_mode("open");
+
+$Function STRING get_stats_json()
+
+Return execution statistics as JSON. Counters are atomic and thread-safe. Example::
+
+    set resp.http.X-Wasm-Stats = wasm.get_stats_json();
+
+$Function STRING get_metrics_json()
+
+Return Proxy-Wasm metrics as JSON. Returns "{}" if empty. Example::
+
+    synthetic(wasm.get_metrics_json());

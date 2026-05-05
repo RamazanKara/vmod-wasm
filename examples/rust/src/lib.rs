@@ -404,3 +404,30 @@ pub extern "C" fn proxy_on_request_headers(_context_id: i32, _num_headers: i32, 
 
     0 // CONTINUE
 }
+
+/// Called for each HTTP response. Adds X-Wasm-Response header.
+///
+/// Returns 0 (CONTINUE).
+#[no_mangle]
+pub extern "C" fn proxy_on_response_headers(_context_id: i32, _num_headers: i32, _end_of_stream: i32) -> i32 {
+    // Log that we're processing response
+    let msg = b"proxy-wasm filter: processing response";
+    unsafe {
+        proxy_log(1, msg.as_ptr() as i32, msg.len() as i32);
+    }
+
+    // Add X-Wasm-Response header (map_type 2 = HTTP_RESPONSE_HEADERS)
+    let hdr_name = b"X-Wasm-Response";
+    let hdr_value = b"processed";
+    unsafe {
+        proxy_add_header_map_value(
+            2, // HTTP_RESPONSE_HEADERS
+            hdr_name.as_ptr() as i32,
+            hdr_name.len() as i32,
+            hdr_value.as_ptr() as i32,
+            hdr_value.len() as i32,
+        );
+    }
+
+    0 // CONTINUE
+}

@@ -2,6 +2,38 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [2.0.0] - 2026-05-05
+
+### Added
+- **Anti-IP-rebinding**: `proxy_http_call` now validates resolved IPs against
+  RFC1918, RFC5735, RFC4193, and loopback ranges to prevent SSRF attacks via
+  DNS rebinding.
+- **proxy_set_property**: Wasm modules can now mutate request properties:
+  - `request.path` / `request.url_path` — URL rewriting
+  - `request.method` — HTTP method change
+  - `request.host` — Host header modification
+- **Request body access**: `proxy_on_request_body` now receives actual body
+  data (up to 1 MiB, automatically cached via VRT_CacheReqBody).
+- **Execution statistics**: New `wasm.get_stats_json()` VCL function returns
+  atomic counters: calls_total, calls_ok, calls_error, calls_timeout,
+  local_responses, http_calls, http_calls_blocked, body_bytes_in, fuel_total.
+- **Execution timing**: Logs VSL warning when Wasm execution exceeds 10ms.
+- **Structured logging**: All proxy_log output prefixed with `[wasm:<module>]`.
+
+### Changed
+- Merged 4 duplicated lifecycle functions into single generic
+  `proxy_wasm_execute()` (saved ~650 lines).
+- Consolidated 11 stub functions into 2 generic stubs (`pw_stub_ok`,
+  `pw_stub_not_found`).
+- Removed all `pthread_rwlock` — config is immutable after `vcl_init`.
+- Trimmed VCC documentation from 270 to 117 lines.
+- Consolidated test suite from 18 to 16 test files.
+- Updated COMPATIBILITY.md to reflect actual implementation coverage.
+
+### Fixed
+- `proxy_set_header_map_pairs` was documented as stub but was actually
+  implemented — fixed documentation.
+
 ## [1.0.1] - 2026-04-29
 
 ### Changed
