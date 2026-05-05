@@ -1,0 +1,3 @@
+# Prevent git from modifying line endings in vendored sources
+# (cargo checksums are sensitive to byte-exact content)
+examples/proxy-wasm-filter/vendor/** -text
