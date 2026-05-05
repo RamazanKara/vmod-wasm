@@ -10,7 +10,7 @@ varnish v1 -vcl+backend {
 
     sub vcl_init {
         wasm.load("filter", "${wasm_module}");
-        wasm.set_fuel(100000000);
+        wasm.set_fuel(10000000);
     }
 
     sub vcl_recv {

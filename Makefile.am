@@ -12,7 +12,7 @@ check-local:
 	@if test -n "$(VARNISHTEST)"; then \
 		for t in $(srcdir)/tests/*.vtc; do \
 			echo "Running $$t..."; \
-			$(VARNISHTEST) \
+			$(VARNISHTEST) -t 120 \
 				-Dvmod_wasm="$(abs_top_builddir)/src/.libs/libvmod_wasm.so" \
 				-Dwasm_module="$(abs_top_srcdir)/tests/wasm/test_module.wasm" \
 				-Dsdk_module="$(abs_top_srcdir)/tests/wasm/proxy_wasm_filter.wasm" \

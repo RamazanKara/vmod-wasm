@@ -181,14 +181,14 @@ pw_proxy_send_local_response(void *env, wasmtime_caller_t *caller,
 
 	/*
 	 * ABI: proxy_send_local_response(
-	 *   status_code,           // args[0] i32
-	 *   headers_ptr,           // args[1] i32 (serialized header map)
-	 *   headers_size,          // args[2] i32
-	 *   body_ptr,              // args[3] i32
-	 *   body_size,             // args[4] i32
-	 *   grpc_status,           // args[5] i32 (ignored)
-	 *   grpc_status_msg_ptr,   // args[6] i32 (ignored)
-	 *   grpc_status_msg_size   // args[7] i32 (ignored)
+	 *   status_code,              // args[0] i32
+	 *   status_details_ptr,       // args[1] i32
+	 *   status_details_size,      // args[2] i32
+	 *   body_ptr,                 // args[3] i32
+	 *   body_size,                // args[4] i32
+	 *   headers_ptr,              // args[5] i32 (serialized header map)
+	 *   headers_size,             // args[6] i32
+	 *   grpc_status               // args[7] i32 (ignored)
 	 * )
 	 */
 	ctx->local_response_set = 1;
@@ -209,8 +209,8 @@ pw_proxy_send_local_response(void *env, wasmtime_caller_t *caller,
 	}
 
 	/* Capture response headers (serialized proxy-wasm format) */
-	headers_ptr = (uint32_t)args[1].of.i32;
-	headers_size = (uint32_t)args[2].of.i32;
+	headers_ptr = (uint32_t)args[5].of.i32;
+	headers_size = (uint32_t)args[6].of.i32;
 	if (headers_size > 0 && pw_validate_region(ctx, headers_ptr, headers_size)) {
 		free(ctx->local_response_headers);
 		ctx->local_response_headers = malloc(headers_size);

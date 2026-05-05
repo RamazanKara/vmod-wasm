@@ -975,7 +975,7 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
     int *status_code)
 {
 	return (proxy_wasm_execute(engine, ctx, module_name,
-	    VWASM_PHASE_REQUEST, NULL, NULL, status_code));
+	    VWASM_PHASE_REQUEST, "", "", status_code));
 }
 
 int
@@ -985,7 +985,7 @@ vwasm_proxy_wasm_response_call(struct vwasm_engine *engine,
     int *status_code)
 {
 	return (proxy_wasm_execute(engine, ctx, module_name,
-	    VWASM_PHASE_RESPONSE, NULL, NULL, status_code));
+	    VWASM_PHASE_RESPONSE, "", "", status_code));
 }
 
 int
