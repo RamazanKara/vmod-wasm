@@ -5,7 +5,7 @@ server s1 {
     txresp -status 200 -hdr "X-Backend: origin" -body "OK"
 } -start
 
-varnish v1 -vcl+backend {
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
     import wasm from "${vmod_wasm}";
 
     sub vcl_init {
