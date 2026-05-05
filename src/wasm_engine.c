@@ -28,6 +28,7 @@
 struct wasm_module_entry {
 	char			*name;
 	wasmtime_module_t	*module;
+	wasmtime_instance_pre_t	*instance_pre;
 };
 
 struct vwasm_engine {
@@ -113,6 +114,7 @@ vwasm_engine_destroy(struct vwasm_engine **enginep)
 
 	for (i = 0; i < e->nmodules; i++) {
 		free(e->modules[i].name);
+		wasmtime_instance_pre_delete(e->modules[i].instance_pre);
 		wasmtime_module_delete(e->modules[i].module);
 	}
 
@@ -282,6 +284,16 @@ vwasm_engine_load_module(struct vwasm_engine *engine,
 		return (-1);
 	}
 
+	/* Pre-instantiate: validate imports at load time (fail-fast) */
+	error = wasmtime_linker_instantiate_pre(engine->linker, module,
+	    &engine->modules[engine->nmodules].instance_pre);
+	if (error != NULL) {
+		pthread_rwlock_unlock(&engine->rwlock);
+		wasmtime_error_delete(error);
+		wasmtime_module_delete(module);
+		return (-1);
+	}
+
 	engine->modules[engine->nmodules].name = strdup(name);
 	engine->modules[engine->nmodules].module = module;
 	engine->nmodules++;
@@ -291,14 +303,14 @@ vwasm_engine_load_module(struct vwasm_engine *engine,
 	return (ret);
 }
 
-static wasmtime_module_t *
+static struct wasm_module_entry *
 find_module(struct vwasm_engine *engine, const char *name)
 {
 	int i;
 
 	for (i = 0; i < engine->nmodules; i++) {
 		if (strcmp(engine->modules[i].name, name) == 0)
-			return (engine->modules[i].module);
+			return (&engine->modules[i]);
 	}
 	return (NULL);
 }
@@ -309,7 +321,7 @@ vwasm_engine_call(struct vwasm_engine *engine,
     const char *module_name, const char *func_name,
     int *result)
 {
-	wasmtime_module_t *module;
+	struct wasm_module_entry *entry;
 	wasmtime_store_t *store;
 	wasmtime_context_t *context;
 	wasmtime_instance_t instance;
@@ -333,10 +345,10 @@ vwasm_engine_call(struct vwasm_engine *engine,
 
 	/* Find the pre-compiled module */
 	pthread_rwlock_rdlock(&engine->rwlock);
-	module = find_module(engine, module_name);
+	entry = find_module(engine, module_name);
 	pthread_rwlock_unlock(&engine->rwlock);
 
-	if (module == NULL)
+	if (entry == NULL)
 		return (-1);
 
 	/* Set up host context with Varnish request context */
@@ -357,9 +369,9 @@ vwasm_engine_call(struct vwasm_engine *engine,
 	/* Set memory limiter — cap linear memory growth */
 	wasmtime_store_limiter(store, (int64_t)mem_limit, -1, -1, -1, -1);
 
-	/* Instantiate the module via linker (resolves host function imports) */
-	error = wasmtime_linker_instantiate(engine->linker, context,
-	    module, &instance, &trap);
+	/* Instantiate from pre-validated instance (skips import resolution) */
+	error = wasmtime_instance_pre_instantiate(entry->instance_pre,
+	    context, &instance, &trap);
 	if (error != NULL) {
 		log_error(ctx, error, module_name, func_name);
 		goto cleanup;
@@ -498,7 +510,7 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
     const char *module_name,
     int *status_code)
 {
-	wasmtime_module_t *module;
+	struct wasm_module_entry *entry;
 	wasmtime_store_t *store;
 	wasmtime_context_t *context;
 	wasmtime_instance_t instance;
@@ -526,10 +538,10 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 
 	/* Find the pre-compiled module */
 	pthread_rwlock_rdlock(&engine->rwlock);
-	module = find_module(engine, module_name);
+	entry = find_module(engine, module_name);
 	pthread_rwlock_unlock(&engine->rwlock);
 
-	if (module == NULL)
+	if (entry == NULL)
 		return (-1);
 
 	/* Set up proxy-wasm context */
@@ -554,9 +566,9 @@ vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 	wasmtime_context_set_fuel(context, fuel_limit);
 	wasmtime_store_limiter(store, (int64_t)mem_limit, -1, -1, -1, -1);
 
-	/* Instantiate the module via linker */
-	error = wasmtime_linker_instantiate(engine->linker, context,
-	    module, &instance, &trap);
+	/* Instantiate from pre-validated instance (skips import resolution) */
+	error = wasmtime_instance_pre_instantiate(entry->instance_pre,
+	    context, &instance, &trap);
 	if (error != NULL) {
 		log_error(ctx, error, module_name, "instantiate");
 		goto cleanup;
