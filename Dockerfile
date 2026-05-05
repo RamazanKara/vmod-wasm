@@ -1,8 +1,10 @@
-FROM debian:bookworm-slim
+FROM varnish:9.0.1
 
 ARG WASMTIME_VERSION=44.0.0
 
-# Install build dependencies
+USER root
+
+# Install build dependencies (Varnish 9 is already installed in base image)
 RUN apt-get update && apt-get install -y \
     automake \
     autoconf \
@@ -13,17 +15,8 @@ RUN apt-get update && apt-get install -y \
     python3 \
     curl \
     ca-certificates \
-    gnupg \
     xz-utils \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Varnish 8.0 from packagecloud
-RUN curl -fsSL https://packagecloud.io/varnishcache/varnish80/gpgkey \
-       | gpg --dearmor -o /usr/share/keyrings/varnish.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/varnish.gpg] https://packagecloud.io/varnishcache/varnish80/debian/ bookworm main" \
-       > /etc/apt/sources.list.d/varnish.list \
-    && apt-get update \
-    && apt-get install -y varnish-dev varnish \
+    varnish-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Wasmtime C API

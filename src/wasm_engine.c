@@ -26,6 +26,7 @@
 
 #define MAX_MODULES 64
 #define VWASM_MAX_BODY_CACHE	(1024 * 1024)  /* 1 MiB max body to cache */
+#define VWASM_BODY_STACK_MAX	(64 * 1024)    /* 64 KiB stack buffer for bodies */
 
 struct wasm_module_entry {
 	char			*name;
@@ -704,6 +705,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	size_t plugin_config_len;
 	const char *phase_headers_fn;
 	const char *phase_body_fn;
+	int has_body_handler;
 	struct timespec ts_start, ts_end;
 	long elapsed_ms;
 
@@ -719,7 +721,6 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	phase_body_fn = (phase == VWASM_PHASE_REQUEST) ?
 	    "proxy_on_request_body" : "proxy_on_response_body";
 
-	/* Read current limits */
 	/* Read current limits */
 	fuel_limit = engine->fuel_limit;
 	mem_limit = engine->memory_limit;
@@ -858,12 +859,25 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	}
 
 	/* 6. Body callback — pass actual body if available */
-	if (phase == VWASM_PHASE_REQUEST && ctx->req != NULL) {
+	has_body_handler = wasmtime_instance_export_get(context, &instance,
+	    phase_body_fn, strlen(phase_body_fn), &item) &&
+	    item.kind == WASMTIME_EXTERN_FUNC;
+
+	if (has_body_handler && phase == VWASM_PHASE_REQUEST &&
+	    ctx->req != NULL) {
 		VCL_BYTES cached_size;
 		cached_size = VRT_CacheReqBody(ctx, VWASM_MAX_BODY_CACHE);
 		if (cached_size > 0) {
 			struct body_collect bc;
-			bc.buf = malloc((size_t)cached_size);
+			uint8_t stack_body[VWASM_BODY_STACK_MAX];
+			int heap_alloc = 0;
+
+			if ((size_t)cached_size <= sizeof(stack_body)) {
+				bc.buf = stack_body;
+			} else {
+				bc.buf = malloc((size_t)cached_size);
+				heap_alloc = 1;
+			}
 			if (bc.buf != NULL) {
 				bc.len = 0;
 				bc.cap = (size_t)cached_size;
@@ -873,21 +887,27 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 				    bc.len > 0) {
 					proxy_ctx.request_body = bc.buf;
 					proxy_ctx.request_body_len = bc.len;
-				} else {
+					proxy_ctx.request_body_heap =
+					    heap_alloc;
+				} else if (heap_alloc) {
 					free(bc.buf);
 				}
 			}
 		}
 	}
 
-	args[0].kind = WASMTIME_I32;
-	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
-	args[1].kind = WASMTIME_I32;
-	args[1].of.i32 = (int32_t)(phase == VWASM_PHASE_REQUEST ?
-	    proxy_ctx.request_body_len : proxy_ctx.response_body_len);
-	args[2].kind = WASMTIME_I32;
-	args[2].of.i32 = 1;
-	call_wasm_func(context, &instance, phase_body_fn, args, 3, NULL);
+	if (has_body_handler) {
+		args[0].kind = WASMTIME_I32;
+		args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
+		args[1].kind = WASMTIME_I32;
+		args[1].of.i32 = (int32_t)(phase == VWASM_PHASE_REQUEST ?
+		    proxy_ctx.request_body_len :
+		    proxy_ctx.response_body_len);
+		args[2].kind = WASMTIME_I32;
+		args[2].of.i32 = 1;
+		call_wasm_func(context, &instance,
+		    phase_body_fn, args, 3, NULL);
+	}
 
 	/* 7. proxy_on_log */
 	args[0].kind = WASMTIME_I32;

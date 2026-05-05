@@ -11,6 +11,10 @@ libvmod_wasm_la_SOURCES = \
 	host_functions.h \
 	proxy_wasm.c \
 	proxy_wasm.h \
+	proxy_wasm_mem.h \
+	proxy_wasm_headers.c \
+	proxy_wasm_properties.c \
+	proxy_wasm_http.c \
 	proxy_wasm_shared.c \
 	proxy_wasm_shared.h
 

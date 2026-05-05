@@ -177,6 +177,7 @@ struct vwasm_proxy_ctx {
 	/* HTTP request/response body access */
 	const uint8_t		*request_body;
 	size_t			 request_body_len;
+	int			 request_body_heap;	/* 1 if heap-allocated */
 	const uint8_t		*response_body;
 	size_t			 response_body_len;
 	/* Modified body (if module called set_buffer_bytes on body) */
@@ -192,6 +193,34 @@ struct vwasm_proxy_ctx {
 	const char		**allowed_upstreams;
 	uint32_t		 num_allowed_upstreams;
 };
+
+/* ----------------------------------------------------------------
+ * Host function declarations (split across proxy_wasm_*.c files)
+ * ---------------------------------------------------------------- */
+
+/* proxy_wasm_headers.c */
+wasm_trap_t *pw_proxy_get_header_map_value(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+wasm_trap_t *pw_proxy_add_header_map_value(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+wasm_trap_t *pw_proxy_replace_header_map_value(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+wasm_trap_t *pw_proxy_remove_header_map_value(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+wasm_trap_t *pw_proxy_get_header_map_pairs(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+wasm_trap_t *pw_proxy_set_header_map_pairs(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+
+/* proxy_wasm_properties.c */
+wasm_trap_t *pw_proxy_get_property(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+wasm_trap_t *pw_proxy_set_property(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+
+/* proxy_wasm_http.c */
+wasm_trap_t *pw_proxy_http_call(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
 
 /* Register all Proxy-Wasm host functions with the linker */
 int vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker);
