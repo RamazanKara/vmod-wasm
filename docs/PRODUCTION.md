@@ -144,11 +144,11 @@ sub vcl_deliver {
 }
 ```
 
-- The `wasm_body` VDP buffers response body (up to 1 MiB) and calls
-  `proxy_on_response_body` on stream end
-- Body is passed through to the client immediately (no buffering delay)
-- The callback is for inspection only — body modification is not supported
-- If the response body exceeds 1 MiB, the callback receives truncated data
+- The `wasm_body` VDP streams response body chunks directly to
+  `proxy_on_response_body` as they arrive — no buffering
+- Each chunk is forwarded to the client immediately after inspection
+- `end_of_stream=1` is set on the final chunk
+- Memory usage is O(chunk_size), not O(body_size)
 
 ## Upgrading Modules
 
@@ -158,3 +158,19 @@ sub vcl_deliver {
 4. Activate: `varnishadm vcl.use new_vcl`
 5. Monitor logs for errors
 6. Discard old VCL: `varnishadm vcl.discard old_vcl`
+
+## Performance Considerations
+
+### Store Pool Memory Snapshots
+
+Each request acquires a pre-warmed Wasm instance from the store pool. To ensure
+isolation, the module's linear memory is restored from a snapshot (`memcpy`) on
+every acquisition. For typical modules (1-2 Wasm pages = 64-128 KB) this adds
+negligible overhead.
+
+For modules declaring large initial memory (10+ pages / 640 KB+), the per-request
+`memcpy` can become a throughput bottleneck at very high request rates (10K+/s).
+Mitigation strategies:
+- Keep module memory declarations minimal
+- Use `memory.grow` only when needed (lazy allocation inside the module)
+- Monitor `store_pool_acquire_ns` in stats for latency impact

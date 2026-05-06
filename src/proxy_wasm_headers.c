@@ -9,11 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <wasm.h>
-#include <wasmtime.h>
-
 #include "cache/cache.h"
 #include "vcl.h"
+
+#include <wasm.h>
+#include <wasmtime.h>
 
 #include "proxy_wasm.h"
 #include "proxy_wasm_mem.h"

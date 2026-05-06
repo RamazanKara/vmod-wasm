@@ -58,7 +58,8 @@ following security considerations:
 - `proxy_get_header_map_value`: Read-only access to request/response headers
 - `proxy_add_header_map_value`: Can only add to the current request/response
 - `proxy_get_header_map_pairs`: Returns all headers including pseudo-headers
-- Pseudo-headers (`:method`, `:path`, `:authority`, `:status`) are read-only
+- Pseudo-headers (`:method`, `:path`, `:authority`) are writable via `proxy_set_property`
+- `:status` is read-only
 
 ### Body Access
 - `proxy_get_buffer_bytes`: Read-only access to request/response body

@@ -12,7 +12,6 @@ LT_PREREQ([2.4])
 LT_INIT([dlopen disable-static])
 
 AC_PROG_CC
-AC_PROG_CC_C99
 AC_PROG_INSTALL
 
 # Check for pkg-config

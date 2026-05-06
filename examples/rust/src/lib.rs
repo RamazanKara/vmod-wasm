@@ -1,7 +1,7 @@
-/// Test Wasm module for vmod-wasm.
-///
-/// Phase 1: Simple exported functions (no host calls)
-/// Phase 2: Functions that call host functions to inspect requests
+// Test Wasm module for vmod-wasm.
+//
+// Phase 1: Simple exported functions (no host calls)
+// Phase 2: Functions that call host functions to inspect requests
 
 // --- Host function imports (provided by vmod-wasm) ---
 
@@ -284,7 +284,8 @@ extern "C" {
 }
 
 // Simple bump allocator for proxy_on_memory_allocate
-static mut ALLOC_BUF: [u8; 65536] = [0u8; 65536];
+const ALLOC_BUF_SIZE: usize = 65536;
+static mut ALLOC_BUF: [u8; ALLOC_BUF_SIZE] = [0u8; ALLOC_BUF_SIZE];
 static mut ALLOC_OFFSET: usize = 0;
 
 /// Proxy-Wasm memory allocator — host calls this to allocate space
@@ -293,12 +294,13 @@ static mut ALLOC_OFFSET: usize = 0;
 pub extern "C" fn proxy_on_memory_allocate(size: i32) -> i32 {
     unsafe {
         // Reset if we're running low on space
-        if ALLOC_OFFSET + (size as usize) > ALLOC_BUF.len() {
+        if ALLOC_OFFSET + (size as usize) > ALLOC_BUF_SIZE {
             ALLOC_OFFSET = 0;
         }
-        let ptr = ALLOC_BUF.as_mut_ptr().add(ALLOC_OFFSET) as i32;
+        let ptr = core::ptr::addr_of_mut!(ALLOC_BUF) as *mut u8;
+        let result = ptr.add(ALLOC_OFFSET) as i32;
         ALLOC_OFFSET += size as usize;
-        ptr
+        result
     }
 }
 

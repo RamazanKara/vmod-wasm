@@ -25,13 +25,13 @@
 #include <errno.h>
 #include <fcntl.h>
 
-#include <wasm.h>
-#include <wasmtime.h>
-
 #include "cache/cache.h"
 #include "vrt_obj.h"
 #include "vsa.h"
 #include "vcl.h"
+
+#include <wasm.h>
+#include <wasmtime.h>
 
 #include "proxy_wasm.h"
 #include "proxy_wasm_shared.h"

@@ -14,11 +14,11 @@
 #include <time.h>
 #include <pthread.h>
 
-#include <wasm.h>
-#include <wasmtime.h>
-
 #include "cache/cache.h"
 #include "vcl.h"
+
+#include <wasm.h>
+#include <wasmtime.h>
 
 #include "wasm_engine.h"
 #include "host_functions.h"
@@ -109,9 +109,9 @@ tick_timer_thread(void *arg)
 	wasmtime_instance_t instance;
 	wasmtime_error_t *error;
 	wasm_trap_t *trap;
-	wasmtime_extern_t tick_fn;
-	wasmtime_val_t tick_args[2];
-	wasmtime_val_t tick_result;
+	wasmtime_extern_t item;
+	wasmtime_val_t args[2];
+	wasmtime_val_t result;
 	struct vwasm_proxy_ctx pctx;
 	struct timespec ts;
 	int found;
@@ -137,9 +137,9 @@ tick_timer_thread(void *arg)
 		    engine->epoch_deadline_ms > 0 ?
 		    engine->epoch_deadline_ms : 5000);
 
-		/* Instantiate the module */
-		error = wasmtime_linker_instantiate(engine->linker, wctx,
-		    entry->module, &instance, &trap);
+		/* Instantiate via pre-linked template (fast path) */
+		error = wasmtime_instance_pre_instantiate(
+		    entry->instance_pre, wctx, &instance, &trap);
 		if (error != NULL || trap != NULL) {
 			if (error) wasmtime_error_delete(error);
 			if (trap) wasm_trap_delete(trap);
@@ -147,17 +147,7 @@ tick_timer_thread(void *arg)
 			continue;
 		}
 
-		/* Look up proxy_on_tick export */
-		found = wasmtime_instance_export_get(wctx, &instance,
-		    "proxy_on_tick", 13, &tick_fn);
-		if (!found || tick_fn.kind != WASMTIME_EXTERN_FUNC) {
-			wasmtime_store_delete(store);
-			/* Module doesn't export proxy_on_tick, stop timer */
-			tt->running = 0;
-			break;
-		}
-
-		/* Set up minimal context for the tick */
+		/* Set up context before lifecycle calls */
 		memset(&pctx, 0, sizeof(pctx));
 		pctx.engine = engine;
 		pctx.wasm_ctx = wctx;
@@ -165,13 +155,61 @@ tick_timer_thread(void *arg)
 		pctx.module_name = entry->name;
 		wasmtime_context_set_data(wctx, &pctx);
 
-		/* Call proxy_on_tick(root_context_id) */
-		tick_args[0].kind = WASMTIME_I32;
-		tick_args[0].of.i32 = 1;  /* root_context_id */
+		/*
+		 * Run Proxy-Wasm initialization lifecycle:
+		 * 1. _initialize (WASI reactor start)
+		 * 2. proxy_on_context_create(1, 0) — root context
+		 * 3. proxy_on_vm_start(1, 0) — VM configuration
+		 */
+		found = wasmtime_instance_export_get(wctx, &instance,
+		    "_initialize", 11, &item);
+		if (found && item.kind == WASMTIME_EXTERN_FUNC) {
+			trap = NULL;
+			error = wasmtime_func_call(wctx, &item.of.func,
+			    NULL, 0, NULL, 0, &trap);
+			if (error) wasmtime_error_delete(error);
+			if (trap) wasm_trap_delete(trap);
+		}
+
+		args[0].kind = WASMTIME_I32;
+		args[0].of.i32 = 1;  /* context_id */
+		args[1].kind = WASMTIME_I32;
+		args[1].of.i32 = 0;  /* parent_context_id */
+
+		found = wasmtime_instance_export_get(wctx, &instance,
+		    "proxy_on_context_create", 23, &item);
+		if (found && item.kind == WASMTIME_EXTERN_FUNC) {
+			trap = NULL;
+			error = wasmtime_func_call(wctx, &item.of.func,
+			    args, 2, NULL, 0, &trap);
+			if (error) wasmtime_error_delete(error);
+			if (trap) wasm_trap_delete(trap);
+		}
+
+		found = wasmtime_instance_export_get(wctx, &instance,
+		    "proxy_on_vm_start", 17, &item);
+		if (found && item.kind == WASMTIME_EXTERN_FUNC) {
+			trap = NULL;
+			error = wasmtime_func_call(wctx, &item.of.func,
+			    args, 2, &result, 1, &trap);
+			if (error) wasmtime_error_delete(error);
+			if (trap) wasm_trap_delete(trap);
+		}
+
+		/* Look up and call proxy_on_tick(root_context_id) */
+		found = wasmtime_instance_export_get(wctx, &instance,
+		    "proxy_on_tick", 13, &item);
+		if (!found || item.kind != WASMTIME_EXTERN_FUNC) {
+			vwasm_proxy_ctx_cleanup(&pctx);
+			wasmtime_store_delete(store);
+			/* Module doesn't export proxy_on_tick, stop timer */
+			tt->running = 0;
+			break;
+		}
 
 		trap = NULL;
-		error = wasmtime_func_call(wctx, &tick_fn.of.func,
-		    tick_args, 1, &tick_result, 0, &trap);
+		error = wasmtime_func_call(wctx, &item.of.func,
+		    args, 1, NULL, 0, &trap);
 		if (error != NULL)
 			wasmtime_error_delete(error);
 		if (trap != NULL)

@@ -60,7 +60,8 @@ RUN cd examples/transform \
     && cp target/wasm32-unknown-unknown/release/transform.wasm /src/tests/wasm/
 
 # Build the VMOD
-RUN chmod +x autogen.sh \
+RUN echo "3.1.0" > vmod_vcs_version.txt \
+    && chmod +x autogen.sh \
     && ./autogen.sh \
     && ./configure --with-wasmtime=${WASMTIME_DIR} \
     && make

@@ -16,7 +16,7 @@ Includes a full [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) impl
 - Load `.wasm` modules at VCL init time
 - Call exported Wasm functions from VCL
 - Full Proxy-Wasm ABI v0.2.1 (header maps, trailers, buffers, HTTP callouts, properties, shared data, metrics, tick timer, stream control)
-- WASI stub support (modules compiled with `wasm32-wasi` target work out of the box)
+- WASI support (`fd_write`, `clock_time_get`, `random_get` with real implementations)
 - Epoch-based execution time limits (low-overhead, no per-instruction cost)
 - Memory limits (default 16 MiB)
 - Store pooling for fast per-request instantiation

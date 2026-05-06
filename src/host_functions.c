@@ -23,14 +23,15 @@
 #include <sys/random.h>
 #endif
 
-#include <wasm.h>
-#include <wasmtime.h>
-
 #include "cache/cache.h"
 #include "vrt_obj.h"
 #include "vcl.h"
 
+#include <wasm.h>
+#include <wasmtime.h>
+
 #include "host_functions.h"
+#include "wasi_types.h"
 
 /*
  * Helper: validate a Wasm memory region [ptr, ptr+len) is in bounds.
@@ -589,7 +590,7 @@ wasi_fd_write(void *env, wasmtime_caller_t *caller,
 	results[0].kind = WASMTIME_I32;
 
 	if (hctx == NULL || !hctx->memory_valid) {
-		results[0].of.i32 = 8; /* __WASI_ERRNO_BADF */
+		results[0].of.i32 = WASI_ERRNO_BADF;
 		return (NULL);
 	}
 
@@ -603,19 +604,19 @@ wasi_fd_write(void *env, wasmtime_caller_t *caller,
 
 	/* Only allow stdout(1) and stderr(2) */
 	if (fd != 1 && fd != 2) {
-		results[0].of.i32 = 8; /* __WASI_ERRNO_BADF */
+		results[0].of.i32 = WASI_ERRNO_BADF;
 		return (NULL);
 	}
 
 	/* Validate nwritten pointer */
 	if (nwritten_ptr + 4 > (uint32_t)msz) {
-		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		results[0].of.i32 = WASI_ERRNO_INVAL;
 		return (NULL);
 	}
 
 	/* Validate iovecs array bounds */
 	if (iovs_ptr + (uint64_t)iovs_len * 8 > msz) {
-		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		results[0].of.i32 = WASI_ERRNO_INVAL;
 		return (NULL);
 	}
 
@@ -632,7 +633,7 @@ wasi_fd_write(void *env, wasmtime_caller_t *caller,
 
 		/* Bounds check the buffer */
 		if ((uint64_t)buf_offset + buf_len > msz) {
-			results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+			results[0].of.i32 = WASI_ERRNO_INVAL;
 			return (NULL);
 		}
 
@@ -644,7 +645,7 @@ wasi_fd_write(void *env, wasmtime_caller_t *caller,
 	/* Write number of bytes written */
 	memcpy(base + nwritten_ptr, &total_written, 4);
 
-	results[0].of.i32 = 0; /* __WASI_ERRNO_SUCCESS */
+	results[0].of.i32 = WASI_ERRNO_SUCCESS;
 	return (NULL);
 }
 
@@ -673,7 +674,7 @@ wasi_clock_time_get(void *env, wasmtime_caller_t *caller,
 	results[0].kind = WASMTIME_I32;
 
 	if (hctx == NULL || !hctx->memory_valid) {
-		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		results[0].of.i32 = WASI_ERRNO_INVAL;
 		return (NULL);
 	}
 
@@ -686,32 +687,32 @@ wasi_clock_time_get(void *env, wasmtime_caller_t *caller,
 
 	/* Map WASI clock IDs to POSIX */
 	switch (clock_id) {
-	case 0: /* __WASI_CLOCKID_REALTIME */
+	case WASI_CLOCKID_REALTIME:
 		cid = CLOCK_REALTIME;
 		break;
-	case 1: /* __WASI_CLOCKID_MONOTONIC */
+	case WASI_CLOCKID_MONOTONIC:
 		cid = CLOCK_MONOTONIC;
 		break;
 	default:
-		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		results[0].of.i32 = WASI_ERRNO_INVAL;
 		return (NULL);
 	}
 
 	/* Validate output pointer (uint64 = 8 bytes) */
 	if (time_ptr + 8 > (uint32_t)msz) {
-		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		results[0].of.i32 = WASI_ERRNO_INVAL;
 		return (NULL);
 	}
 
 	if (clock_gettime(cid, &ts) != 0) {
-		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		results[0].of.i32 = WASI_ERRNO_INVAL;
 		return (NULL);
 	}
 
 	nanos = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 	memcpy(base + time_ptr, &nanos, 8);
 
-	results[0].of.i32 = 0; /* __WASI_ERRNO_SUCCESS */
+	results[0].of.i32 = WASI_ERRNO_SUCCESS;
 	return (NULL);
 }
 
@@ -736,7 +737,7 @@ wasi_random_get(void *env, wasmtime_caller_t *caller,
 	results[0].kind = WASMTIME_I32;
 
 	if (hctx == NULL || !hctx->memory_valid) {
-		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		results[0].of.i32 = WASI_ERRNO_INVAL;
 		return (NULL);
 	}
 
@@ -748,7 +749,7 @@ wasi_random_get(void *env, wasmtime_caller_t *caller,
 
 	/* Bounds check */
 	if ((uint64_t)buf_ptr + buf_len > msz) {
-		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		results[0].of.i32 = WASI_ERRNO_INVAL;
 		return (NULL);
 	}
 
@@ -761,7 +762,7 @@ wasi_random_get(void *env, wasmtime_caller_t *caller,
 			ret = getrandom(base + buf_ptr + filled,
 			    buf_len - filled, 0);
 			if (ret < 0) {
-				results[0].of.i32 = 29; /* __WASI_ERRNO_IO */
+				results[0].of.i32 = WASI_ERRNO_IO;
 				return (NULL);
 			}
 			filled += (size_t)ret;
@@ -773,19 +774,19 @@ wasi_random_get(void *env, wasmtime_caller_t *caller,
 		/* Fallback: read from /dev/urandom */
 		FILE *f = fopen("/dev/urandom", "r");
 		if (f == NULL) {
-			results[0].of.i32 = 29; /* __WASI_ERRNO_IO */
+			results[0].of.i32 = WASI_ERRNO_IO;
 			return (NULL);
 		}
 		if (fread(base + buf_ptr, 1, buf_len, f) != buf_len) {
 			fclose(f);
-			results[0].of.i32 = 29; /* __WASI_ERRNO_IO */
+			results[0].of.i32 = WASI_ERRNO_IO;
 			return (NULL);
 		}
 		fclose(f);
 #endif
 	}
 
-	results[0].of.i32 = 0; /* __WASI_ERRNO_SUCCESS */
+	results[0].of.i32 = WASI_ERRNO_SUCCESS;
 	return (NULL);
 }
 

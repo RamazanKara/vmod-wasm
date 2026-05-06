@@ -11,6 +11,7 @@ libvmod_wasm_la_SOURCES = \
 	vdp_wasm.h \
 	host_functions.c \
 	host_functions.h \
+	wasi_types.h \
 	proxy_wasm.c \
 	proxy_wasm.h \
 	proxy_wasm_mem.h \

@@ -23,11 +23,11 @@
 #include <errno.h>
 #include <fcntl.h>
 
-#include <wasm.h>
-#include <wasmtime.h>
-
 #include "cache/cache.h"
 #include "vcl.h"
+
+#include <wasm.h>
+#include <wasmtime.h>
 
 #include "proxy_wasm.h"
 #include "proxy_wasm_mem.h"
@@ -400,13 +400,13 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 		fd = pw_http_connect(host, port, (int)timeout_ms);
 	}
 
-		if (fd < 0) {
-			if (http_pool != NULL)
-				vwasm_http_pool_cb_failure(http_pool,
-				    host, port);
-			results[0].of.i32 = PROXY_INTERNAL;
-			return (NULL);
-		}
+	if (fd < 0) {
+		if (http_pool != NULL)
+			vwasm_http_pool_cb_failure(http_pool,
+			    host, port);
+		results[0].of.i32 = PROXY_INTERNAL;
+		return (NULL);
+	}
 
 	/* Send request */
 	if (write(fd, request_buf, (size_t)req_len) != req_len) {
