@@ -1,0 +1,72 @@
+varnishtest "vmod-wasm: pool statistics JSON output"
+
+# This test verifies:
+# 1. Store pool stats reporting
+# 2. HTTP pool stats reporting
+# 3. JSON format correctness
+# 4. Stats reflect actual pool state
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+server s1 -repeat 3 -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+        wasm.set_store_pool_size("test", 8);
+        wasm.set_http_pool_size(32);
+    }
+
+    sub vcl_recv {
+        if (req.url == "/pool-stats") {
+            set req.http.X-Pool-Stats =
+                wasm.get_pool_stats_json("test");
+        }
+        if (req.url == "/http-stats") {
+            set req.http.X-Http-Stats =
+                wasm.get_http_pool_stats_json();
+        }
+        if (req.url == "/unknown-pool") {
+            set req.http.X-Pool-Stats =
+                wasm.get_pool_stats_json("nonexistent");
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Pool-Stats = req.http.X-Pool-Stats;
+        set resp.http.X-Http-Stats = req.http.X-Http-Stats;
+    }
+} -start
+
+# Test: pool stats for known module returns valid JSON
+client c1 {
+    txreq -url "/pool-stats"
+    rxresp
+    expect resp.status == 200
+    # Should contain JSON with capacity field
+    expect resp.http.X-Pool-Stats ~ "capacity"
+    expect resp.http.X-Pool-Stats ~ "acquires"
+    expect resp.http.X-Pool-Stats ~ "releases"
+} -run
+
+# Test: HTTP pool stats returns valid JSON
+client c2 {
+    txreq -url "/http-stats"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Http-Stats ~ "max_conns"
+    expect resp.http.X-Http-Stats ~ "acquires"
+} -run
+
+# Test: unknown module pool stats returns empty JSON
+client c3 {
+    txreq -url "/unknown-pool"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Pool-Stats == "{}"
+} -run

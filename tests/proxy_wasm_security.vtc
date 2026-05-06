@@ -24,7 +24,6 @@ varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
 
     sub vcl_init {
         wasm.load("filter", "${wasm_module}");
-        wasm.set_fuel(10000000);
         wasm.set_allowed_upstreams("api.internal:8080,auth.svc:443");
         wasm.set_http_call_limit(3);
         wasm.set_fail_mode("closed");

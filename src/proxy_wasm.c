@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Proxy-Wasm ABI host function implementations.
@@ -35,6 +35,7 @@
 
 #include "proxy_wasm.h"
 #include "proxy_wasm_shared.h"
+#include "wasm_engine.h"
 
 /* ----------------------------------------------------------------
  * Global shared state (singleton, thread-safe)
@@ -295,6 +296,110 @@ pw_stub_not_found(void *env, wasmtime_caller_t *caller,
 }
 
 /* ----------------------------------------------------------------
+ * proxy_set_tick_period_milliseconds
+ * ---------------------------------------------------------------- */
+
+static wasm_trap_t *
+pw_proxy_set_tick_period(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_proxy_ctx *ctx;
+	uint32_t period_ms;
+
+	(void)env;
+	(void)nargs;
+	(void)nresults;
+	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
+	results[0].kind = WASMTIME_I32;
+
+	period_ms = (uint32_t)args[0].of.i32;
+	ctx->tick_period_ms = period_ms;
+
+	if (ctx->engine != NULL && ctx->module_name != NULL) {
+		if (vwasm_engine_set_tick_period(ctx->engine,
+		    ctx->module_name, period_ms) != 0) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+	}
+
+	results[0].of.i32 = PROXY_OK;
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
+ * proxy_continue_stream — resume a paused request/response
+ * ---------------------------------------------------------------- */
+
+static wasm_trap_t *
+pw_proxy_continue_stream(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_proxy_ctx *ctx;
+
+	(void)env;
+	(void)args;
+	(void)nargs;
+	(void)nresults;
+	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
+	results[0].kind = WASMTIME_I32;
+
+	ctx->paused = 0;
+	results[0].of.i32 = PROXY_OK;
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
+ * proxy_close_stream — close the current stream
+ * ---------------------------------------------------------------- */
+
+static wasm_trap_t *
+pw_proxy_close_stream(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_proxy_ctx *ctx;
+
+	(void)env;
+	(void)args;
+	(void)nargs;
+	(void)nresults;
+	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
+	results[0].kind = WASMTIME_I32;
+
+	ctx->done = 1;
+	results[0].of.i32 = PROXY_OK;
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
+ * proxy_done — signal completion of the current context
+ * ---------------------------------------------------------------- */
+
+static wasm_trap_t *
+pw_proxy_done(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+
+	(void)env;
+	(void)caller;
+	(void)args;
+	(void)nargs;
+	(void)nresults;
+
+	/* Single-context model: done is a no-op */
+	results[0].kind = WASMTIME_I32;
+	results[0].of.i32 = PROXY_OK;
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
  * proxy_get_buffer_bytes
  * ---------------------------------------------------------------- */
 
@@ -427,6 +532,97 @@ pw_proxy_set_buffer_bytes(void *env, wasmtime_caller_t *caller,
 	default:
 		/* Other buffer types are read-only in this host */
 		break;
+	}
+
+	results[0].of.i32 = PROXY_OK;
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
+ * proxy_get_buffer_status — return buffer size (no unused concept)
+ * ---------------------------------------------------------------- */
+
+static wasm_trap_t *
+pw_proxy_get_buffer_status(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_proxy_ctx *ctx;
+	int32_t buffer_type;
+	size_t data_len = 0;
+
+	(void)env;
+	(void)nargs;
+	(void)nresults;
+	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
+	results[0].kind = WASMTIME_I32;
+
+	buffer_type = args[0].of.i32;
+
+	switch (buffer_type) {
+	case PROXY_BUFFER_VM_CONFIGURATION:
+		data_len = ctx->vm_config_len;
+		break;
+	case PROXY_BUFFER_PLUGIN_CONFIG:
+		data_len = ctx->plugin_config_len;
+		break;
+	case PROXY_BUFFER_HTTP_CALL_BODY:
+		if (ctx->http_response.valid)
+			data_len = ctx->http_response.body_len;
+		break;
+	case PROXY_BUFFER_HTTP_REQUEST_BODY:
+		if (ctx->body_modified && ctx->modified_body != NULL)
+			data_len = ctx->modified_body_len;
+		else if (ctx->request_body != NULL)
+			data_len = ctx->request_body_len;
+		break;
+	case PROXY_BUFFER_HTTP_RESPONSE_BODY:
+		if (ctx->response_body != NULL)
+			data_len = ctx->response_body_len;
+		break;
+	default:
+		break;
+	}
+
+	if (pw_write_u32(ctx, (uint32_t)args[1].of.i32,
+	    (uint32_t)data_len) != 0) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+	/* Flags/unused — always 0 */
+	if (pw_write_u32(ctx, (uint32_t)args[2].of.i32, 0) != 0) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+
+	results[0].of.i32 = PROXY_OK;
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
+ * proxy_get_log_level — return current log level
+ * ---------------------------------------------------------------- */
+
+static wasm_trap_t *
+pw_proxy_get_log_level(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_proxy_ctx *ctx;
+
+	(void)env;
+	(void)nargs;
+	(void)nresults;
+	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
+	results[0].kind = WASMTIME_I32;
+
+	/* Report DEBUG level — Varnish controls actual filtering via VSL */
+	if (pw_write_u32(ctx, (uint32_t)args[0].of.i32,
+	    PROXY_LOG_DEBUG) != 0) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
 	}
 
 	results[0].of.i32 = PROXY_OK;
@@ -970,6 +1166,24 @@ pw_proxy_get_metric(void *env, wasmtime_caller_t *caller,
 }
 
 /* ----------------------------------------------------------------
+ * Trailer map cleanup — free all entries in a trailer map
+ * ---------------------------------------------------------------- */
+
+void
+vwasm_trailer_map_cleanup(struct vwasm_trailer_map *tm)
+{
+	uint32_t i;
+
+	if (tm == NULL)
+		return;
+	for (i = 0; i < tm->count; i++) {
+		free(tm->entries[i].name);
+		free(tm->entries[i].value);
+	}
+	tm->count = 0;
+}
+
+/* ----------------------------------------------------------------
  * Context cleanup — free resources allocated during lifecycle
  * ---------------------------------------------------------------- */
 
@@ -1022,6 +1236,10 @@ vwasm_proxy_ctx_cleanup(struct vwasm_proxy_ctx *ctx)
 		ctx->modified_body_len = 0;
 		ctx->body_modified = 0;
 	}
+
+	/* Free trailer maps */
+	vwasm_trailer_map_cleanup(&ctx->request_trailers);
+	vwasm_trailer_map_cleanup(&ctx->response_trailers);
 }
 
 /* ----------------------------------------------------------------
@@ -1123,6 +1341,9 @@ vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker)
 	if (pw_define_func(linker, "proxy_log", 3, 1,
 	    pw_proxy_log) != 0)
 		return (-1);
+	if (pw_define_func(linker, "proxy_get_log_level", 1, 1,
+	    pw_proxy_get_log_level) != 0)
+		return (-1);
 
 	/* === Header Map — individual (IMPLEMENTED) === */
 	if (pw_define_func(linker, "proxy_get_header_map_value", 5, 1,
@@ -1145,6 +1366,9 @@ vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker)
 	if (pw_define_func(linker, "proxy_set_header_map_pairs", 3, 1,
 	    pw_proxy_set_header_map_pairs) != 0)
 		return (-1);
+	if (pw_define_func(linker, "proxy_get_header_map_size", 2, 1,
+	    pw_proxy_get_header_map_size) != 0)
+		return (-1);
 
 	/* === Properties (IMPLEMENTED) === */
 	if (pw_define_func(linker, "proxy_get_property", 4, 1,
@@ -1161,6 +1385,9 @@ vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker)
 	if (pw_define_func(linker, "proxy_set_buffer_bytes", 5, 1,
 	    pw_proxy_set_buffer_bytes) != 0)
 		return (-1);
+	if (pw_define_func(linker, "proxy_get_buffer_status", 3, 1,
+	    pw_proxy_get_buffer_status) != 0)
+		return (-1);
 
 	/* === Local Response (IMPLEMENTED) === */
 	if (pw_define_func(linker, "proxy_send_local_response", 8, 1,
@@ -1172,23 +1399,23 @@ vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker)
 	    pw_proxy_get_current_time) != 0)
 		return (-1);
 	if (pw_define_func(linker, "proxy_set_tick_period_milliseconds", 1, 1,
-	    pw_stub_ok) != 0)
+	    pw_proxy_set_tick_period) != 0)
 		return (-1);
 
-	/* === Context (STUB — single-context model) === */
+	/* === Context (single-context model) === */
 	if (pw_define_func(linker, "proxy_set_effective_context", 1, 1,
 	    pw_stub_ok) != 0)
 		return (-1);
 	if (pw_define_func(linker, "proxy_done", 0, 1,
-	    pw_stub_ok) != 0)
+	    pw_proxy_done) != 0)
 		return (-1);
 
-	/* === Stream Control (STUB — no pause/resume) === */
+	/* === Stream Control (IMPLEMENTED) === */
 	if (pw_define_func(linker, "proxy_continue_stream", 1, 1,
-	    pw_stub_ok) != 0)
+	    pw_proxy_continue_stream) != 0)
 		return (-1);
 	if (pw_define_func(linker, "proxy_close_stream", 1, 1,
-	    pw_stub_ok) != 0)
+	    pw_proxy_close_stream) != 0)
 		return (-1);
 
 	/* === Shared Data (IMPLEMENTED) === */

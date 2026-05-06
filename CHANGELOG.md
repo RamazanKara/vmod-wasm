@@ -2,6 +2,54 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [3.0.0] - 2026-05-06
+
+### Added
+- **Proxy-Wasm ABI completeness**: Implemented `proxy_get_header_map_size`,
+  `proxy_get_buffer_status`, and `proxy_get_log_level` host functions.
+- **WASI stubs**: Modules compiled with `wasm32-wasi` target now instantiate
+  without error. Provides stubs for `fd_write`, `clock_time_get`, `random_get`,
+  `environ_sizes_get`, `environ_get`, `args_sizes_get`, `args_get`, and
+  `proc_exit` (traps instead of exiting).
+- Stream control functions (`proxy_continue_stream`, `proxy_close_stream`)
+  registered and documented.
+
+### Changed
+- Removed internal scoping block in HTTP callout code (variables moved to
+  function scope for clarity).
+- Documentation overhaul: removed internal implementation plan, rewrote
+  README as user guide, updated COMPATIBILITY matrix, replaced all "fuel"
+  references with epoch-based terminology.
+
+### Fixed
+- Copyright year corrected to 2025 across all source files.
+
+## [2.3.0] - 2026-05-05
+
+### Changed
+- **Streaming VDP body processing**: Response body is no longer buffered.
+  Each chunk is passed to `proxy_on_response_body` immediately as it arrives
+  (with `end_of_stream=0`), then forwarded to the client.  On the final chunk,
+  `end_of_stream=1` is set.  This eliminates the 1 MiB buffer entirely —
+  memory usage for body inspection is now O(chunk_size) instead of O(body_size).
+- **Epoch-based interruption**: Replaced fuel-based instruction counting with
+  epoch-based timeout protection.  A background timer thread increments the
+  engine epoch every 1ms.  Each callback gets a configurable deadline (default
+  100ms).  This reduces per-instruction overhead significantly while still
+  preventing infinite loops.
+
+### Added
+- `wasm.set_epoch_deadline(ms)`: Configure the per-callback execution timeout
+  in milliseconds (default: 100ms).
+- `wasm.set_http_timeout(ms)`: Configure the HTTP callout timeout for
+  `proxy_http_call` (default: 5000ms, cap: 30s).  Previously hardcoded.
+- `vwasm_engine_reset_epoch_deadline()`: Internal API for extending the epoch
+  deadline before each wasm callback phase.
+
+### Fixed
+- HTTP timeout now respects module-supplied timeout (if non-zero), falls back
+  to engine-configured default, with a hard cap at 30 seconds.
+
 ## [2.2.0] - 2026-05-05
 
 ### Added

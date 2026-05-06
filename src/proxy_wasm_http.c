@@ -1,10 +1,14 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Proxy-Wasm HTTP call implementation.
  * Provides proxy_http_call for outbound HTTP requests from Wasm modules.
  */
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #include <string.h>
 #include <stdio.h>
@@ -27,9 +31,10 @@
 
 #include "proxy_wasm.h"
 #include "proxy_wasm_mem.h"
+#include "wasm_engine.h"
+#include "http_pool.h"
 
 #define PW_HTTP_MAX_RESPONSE	(256 * 1024)  /* 256 KiB max response */
-#define PW_HTTP_DEFAULT_TIMEOUT	5000          /* 5 seconds */
 
 /* ----------------------------------------------------------------
  * Anti-IP-rebinding: reject connections to private/internal IPs.
@@ -234,6 +239,8 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	uint32_t resp_num_headers;
 	size_t header_end_offset;
 	size_t i;
+	struct vwasm_http_pool *http_pool;
+	struct vwasm_http_conn *pool_conn = NULL;
 
 	(void)env;
 	(void)nargs;
@@ -258,8 +265,14 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	/* args[6], args[7] = trailers (ignored) */
 	timeout_ms = (uint32_t)args[8].of.i32;
 
+	/*
+	 * Timeout priority: module-supplied > engine-configured > cap.
+	 * If module passes 0, use the engine-configured default.
+	 */
 	if (timeout_ms == 0)
-		timeout_ms = PW_HTTP_DEFAULT_TIMEOUT;
+		timeout_ms = ctx->http_timeout_ms;
+	if (timeout_ms == 0)
+		timeout_ms = VWASM_DEFAULT_HTTP_TIMEOUT_MS;
 	if (timeout_ms > 30000)
 		timeout_ms = 30000; /* Cap at 30s */
 
@@ -360,7 +373,7 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 		    "%s %s HTTP/1.1\r\n"
 		    "Host: %s\r\n"
 		    "Content-Length: %u\r\n"
-		    "Connection: close\r\n"
+		    "Connection: keep-alive\r\n"
 		    "%s\r\n",
 		    method, path, host, body_size, extra_headers);
 	} else {
@@ -368,7 +381,7 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 		req_len = snprintf(request_buf, sizeof(request_buf),
 		    "%s %s HTTP/1.1\r\n"
 		    "Host: %s\r\n"
-		    "Connection: close\r\n"
+		    "Connection: keep-alive\r\n"
 		    "%s\r\n",
 		    method, path, host, extra_headers);
 	}
@@ -378,16 +391,31 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 		return (NULL);
 	}
 
-	/* Connect */
-	fd = pw_http_connect(host, port, (int)timeout_ms);
-	if (fd < 0) {
-		results[0].of.i32 = PROXY_INTERNAL;
-		return (NULL);
+	/* Connect via HTTP pool (if available) or fallback to direct */
+	http_pool = vwasm_engine_get_http_pool(ctx->engine);
+	if (http_pool != NULL) {
+		fd = vwasm_http_pool_acquire(http_pool, host,
+		    port, timeout_ms, &pool_conn);
+	} else {
+		fd = pw_http_connect(host, port, (int)timeout_ms);
 	}
+
+		if (fd < 0) {
+			if (http_pool != NULL)
+				vwasm_http_pool_cb_failure(http_pool,
+				    host, port);
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
 
 	/* Send request */
 	if (write(fd, request_buf, (size_t)req_len) != req_len) {
-		close(fd);
+		if (pool_conn != NULL)
+			vwasm_http_pool_close(http_pool, pool_conn);
+		else
+			close(fd);
+		if (http_pool != NULL)
+			vwasm_http_pool_cb_failure(http_pool, host, port);
 		results[0].of.i32 = PROXY_INTERNAL;
 		return (NULL);
 	}
@@ -396,7 +424,13 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	if (body_size > 0) {
 		uint8_t *body_data = pw_mem_ptr(ctx, body_ptr);
 		if (write(fd, body_data, body_size) != (ssize_t)body_size) {
-			close(fd);
+			if (pool_conn != NULL)
+				vwasm_http_pool_close(http_pool, pool_conn);
+			else
+				close(fd);
+			if (http_pool != NULL)
+				vwasm_http_pool_cb_failure(http_pool,
+				    host, port);
 			results[0].of.i32 = PROXY_INTERNAL;
 			return (NULL);
 		}
@@ -405,7 +439,10 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	/* Read response */
 	response_buf = malloc(PW_HTTP_MAX_RESPONSE);
 	if (response_buf == NULL) {
-		close(fd);
+		if (pool_conn != NULL)
+			vwasm_http_pool_close(http_pool, pool_conn);
+		else
+			close(fd);
 		results[0].of.i32 = PROXY_INTERNAL;
 		return (NULL);
 	}
@@ -418,7 +455,21 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 			break;
 		response_len += (size_t)n;
 	}
-	close(fd);
+
+	/* Release connection back to pool (keep-alive) */
+	if (pool_conn != NULL)
+		vwasm_http_pool_release(http_pool, pool_conn,
+		    response_len > 0 ? 1 : 0);
+	else
+		close(fd);
+
+	/* Report success/failure to circuit breaker */
+	if (http_pool != NULL) {
+		if (response_len > 0)
+			vwasm_http_pool_cb_success(http_pool, host, port);
+		else
+			vwasm_http_pool_cb_failure(http_pool, host, port);
+	}
 
 	if (response_len == 0) {
 		free(response_buf);
@@ -498,10 +549,9 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 
 			cb_ctx = wasmtime_caller_context(caller);
 
-			/* Refuel for the callback */
-			if (ctx->fuel_limit > 0)
-				wasmtime_context_set_fuel(cb_ctx,
-				    ctx->fuel_limit);
+			/* Extend epoch deadline for the callback */
+			wasmtime_context_set_epoch_deadline(cb_ctx,
+			    VWASM_DEFAULT_EPOCH_DEADLINE_MS);
 
 			cb_args[0].kind = WASMTIME_I32;
 			cb_args[0].of.i32 =

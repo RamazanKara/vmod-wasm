@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * All rights reserved.
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -146,24 +146,6 @@ vmod_version(VRT_CTX)
 }
 
 /*
- * wasm.set_fuel(fuel) — Set fuel (instruction) limit for execution.
- * Must be called from vcl_init.
- */
-VCL_VOID
-vmod_set_fuel(VRT_CTX, VCL_INT fuel)
-{
-	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
-
-	if (fuel <= 0) {
-		VRT_fail(ctx, "wasm.set_fuel(): fuel must be positive");
-		return;
-	}
-
-	AN(vwasm_engine_global);
-	vwasm_engine_set_fuel(vwasm_engine_global, (uint64_t)fuel);
-}
-
-/*
  * wasm.set_memory_limit(limit) — Set maximum Wasm linear memory size.
  * Must be called from vcl_init.
  */
@@ -182,18 +164,6 @@ vmod_set_memory_limit(VRT_CTX, VCL_INT limit)
 }
 
 /*
- * wasm.get_fuel() — Return current fuel limit.
- */
-VCL_INT
-vmod_get_fuel(VRT_CTX)
-{
-	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
-
-	AN(vwasm_engine_global);
-	return ((VCL_INT)vwasm_engine_get_fuel(vwasm_engine_global));
-}
-
-/*
  * wasm.get_memory_limit() — Return current memory limit in bytes.
  */
 VCL_INT
@@ -203,6 +173,37 @@ vmod_get_memory_limit(VRT_CTX)
 
 	AN(vwasm_engine_global);
 	return ((VCL_INT)vwasm_engine_get_memory_limit(vwasm_engine_global));
+}
+
+/*
+ * wasm.set_epoch_deadline(ms) — Set epoch-based execution deadline.
+ * Must be called from vcl_init.
+ */
+VCL_VOID
+vmod_set_epoch_deadline(VRT_CTX, VCL_INT ms)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (ms <= 0) {
+		VRT_fail(ctx,
+		    "wasm.set_epoch_deadline(): ms must be positive");
+		return;
+	}
+
+	AN(vwasm_engine_global);
+	vwasm_engine_set_epoch_deadline(vwasm_engine_global, (uint64_t)ms);
+}
+
+/*
+ * wasm.get_epoch_deadline() — Return current epoch deadline in ms.
+ */
+VCL_INT
+vmod_get_epoch_deadline(VRT_CTX)
+{
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	AN(vwasm_engine_global);
+	return ((VCL_INT)vwasm_engine_get_epoch_deadline(vwasm_engine_global));
 }
 
 /*
@@ -503,12 +504,12 @@ vmod_get_stats_json(VRT_CTX)
 	    "{\"calls_total\":%lu,\"calls_ok\":%lu,\"calls_error\":%lu,"
 	    "\"calls_timeout\":%lu,\"local_responses\":%lu,"
 	    "\"http_calls\":%lu,\"http_calls_blocked\":%lu,"
-	    "\"body_bytes_in\":%lu,\"fuel_total\":%lu}",
+	    "\"body_bytes_in\":%lu}",
 	    (unsigned long)s->calls_total, (unsigned long)s->calls_ok,
 	    (unsigned long)s->calls_error, (unsigned long)s->calls_timeout,
 	    (unsigned long)s->local_responses, (unsigned long)s->http_calls,
 	    (unsigned long)s->http_calls_blocked,
-	    (unsigned long)s->body_bytes_in, (unsigned long)s->fuel_total);
+	    (unsigned long)s->body_bytes_in);
 
 	result = WS_Copy(ctx->ws, buf, len + 1);
 	if (result == NULL)
@@ -516,3 +517,225 @@ vmod_get_stats_json(VRT_CTX)
 
 	return (result);
 }
+
+/* ----------------------------------------------------------------
+ * Phase 2: Store pool management
+ * ---------------------------------------------------------------- */
+
+/*
+ * wasm.set_store_pool_size(module, size) — Pre-warm N stores for a module.
+ */
+VCL_VOID
+vmod_set_store_pool_size(VRT_CTX, VCL_STRING module, VCL_INT size)
+{
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (vwasm_engine_global == NULL) {
+		VRT_fail(ctx, "wasm.set_store_pool_size: engine not initialized");
+		return;
+	}
+
+	if (module == NULL || *module == '\0') {
+		VRT_fail(ctx, "wasm.set_store_pool_size: module name required");
+		return;
+	}
+
+	if (size < 1 || size > 256) {
+		VRT_fail(ctx, "wasm.set_store_pool_size: size must be 1-256");
+		return;
+	}
+
+	if (vwasm_engine_init_pool(vwasm_engine_global, module,
+	    (size_t)size, NULL, NULL) != 0)
+		VRT_fail(ctx, "wasm.set_store_pool_size: pool init failed for %s",
+		    module);
+}
+
+/* ----------------------------------------------------------------
+ * Phase 3: HTTP connection pool
+ * ---------------------------------------------------------------- */
+
+/*
+ * wasm.set_http_pool_size(size) — Set max persistent HTTP connections.
+ */
+VCL_VOID
+vmod_set_http_pool_size(VRT_CTX, VCL_INT size)
+{
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (vwasm_engine_global == NULL) {
+		VRT_fail(ctx, "wasm.set_http_pool_size: engine not initialized");
+		return;
+	}
+
+	if (size < 1 || size > 1024) {
+		VRT_fail(ctx, "wasm.set_http_pool_size: size must be 1-1024");
+		return;
+	}
+
+	if (vwasm_engine_init_http_pool(vwasm_engine_global,
+	    (size_t)size) != 0)
+		VRT_fail(ctx, "wasm.set_http_pool_size: pool init failed");
+}
+
+/* ----------------------------------------------------------------
+ * Phase 4: Filter chain
+ * ---------------------------------------------------------------- */
+
+/*
+ * wasm.filter_chain(chain_spec) — Execute request filter chain.
+ */
+VCL_INT
+vmod_filter_chain(VRT_CTX, VCL_STRING chain_spec)
+{
+	const char *modules[64];
+	char *buf, *p, *start;
+	int nmodules = 0;
+	int status_code = 0;
+	int ret;
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (vwasm_engine_global == NULL)
+		return (-1);
+
+	if (chain_spec == NULL || *chain_spec == '\0')
+		return (-1);
+
+	/* Parse pipe-separated chain spec */
+	buf = strdup(chain_spec);
+	if (buf == NULL)
+		return (-1);
+
+	p = buf;
+	while (*p != '\0' && nmodules < 64) {
+		while (*p == '|' || *p == ' ' || *p == '\t')
+			p++;
+		if (*p == '\0')
+			break;
+		start = p;
+		while (*p != '|' && *p != '\0' && *p != ' ' && *p != '\t')
+			p++;
+		if (p > start) {
+			if (*p != '\0')
+				*p++ = '\0';
+			modules[nmodules++] = start;
+		}
+	}
+
+	ret = vwasm_filter_chain_request(vwasm_engine_global,
+	    ctx, modules, nmodules, &status_code);
+
+	free(buf);
+	return (ret);
+}
+
+/*
+ * wasm.filter_chain_response(chain_spec) — Execute response filter chain.
+ */
+VCL_INT
+vmod_filter_chain_response(VRT_CTX, VCL_STRING chain_spec)
+{
+	const char *modules[64];
+	char *buf, *p, *start;
+	int nmodules = 0;
+	int status_code = 0;
+	int ret;
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (vwasm_engine_global == NULL)
+		return (-1);
+
+	if (chain_spec == NULL || *chain_spec == '\0')
+		return (-1);
+
+	/* Parse pipe-separated chain spec */
+	buf = strdup(chain_spec);
+	if (buf == NULL)
+		return (-1);
+
+	p = buf;
+	while (*p != '\0' && nmodules < 64) {
+		while (*p == '|' || *p == ' ' || *p == '\t')
+			p++;
+		if (*p == '\0')
+			break;
+		start = p;
+		while (*p != '|' && *p != '\0' && *p != ' ' && *p != '\t')
+			p++;
+		if (p > start) {
+			if (*p != '\0')
+				*p++ = '\0';
+			modules[nmodules++] = start;
+		}
+	}
+
+	ret = vwasm_filter_chain_response(vwasm_engine_global,
+	    ctx, modules, nmodules, &status_code);
+
+	free(buf);
+	return (ret);
+}
+
+/* ----------------------------------------------------------------
+ * Pool statistics
+ * ---------------------------------------------------------------- */
+
+/*
+ * wasm.get_pool_stats_json(module) — Return store pool stats as JSON.
+ */
+VCL_STRING
+vmod_get_pool_stats_json(VRT_CTX, VCL_STRING module)
+{
+	char *json;
+	const char *result;
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (vwasm_engine_global == NULL || module == NULL)
+		return ("{}");
+
+	json = vwasm_engine_get_pool_stats_json(vwasm_engine_global, module);
+	if (json == NULL)
+		return ("{}");
+
+	result = WS_Copy(ctx->ws, json, (int)(strlen(json) + 1));
+	free(json);
+
+	if (result == NULL)
+		return ("{}");
+
+	return (result);
+}
+
+/*
+ * wasm.get_http_pool_stats_json() — Return HTTP pool stats as JSON.
+ */
+VCL_STRING
+vmod_get_http_pool_stats_json(VRT_CTX)
+{
+	char *json;
+	const char *result;
+
+	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
+
+	if (vwasm_engine_global == NULL)
+		return ("{}");
+
+	json = vwasm_engine_get_http_pool_stats_json(vwasm_engine_global);
+	if (json == NULL)
+		return ("{}");
+
+	result = WS_Copy(ctx->ws, json, (int)(strlen(json) + 1));
+	free(json);
+
+	if (result == NULL)
+		return ("{}");
+
+	return (result);
+}
+
+

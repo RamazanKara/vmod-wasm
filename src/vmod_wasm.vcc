@@ -30,14 +30,6 @@ $Function STRING version()
 
 Return the vmod-wasm version string.
 
-$Function VOID set_fuel(INT fuel)
-
-$Restrict vcl_init
-
-Max instruction fuel per execution. Default 1000000. Example::
-
-    wasm.set_fuel(500000);
-
 $Function VOID set_memory_limit(INT limit)
 
 $Restrict vcl_init
@@ -46,13 +38,22 @@ Max Wasm linear memory in bytes. Default 16 MiB. Example::
 
     wasm.set_memory_limit(8388608);
 
-$Function INT get_fuel()
-
-Return the current fuel limit.
-
 $Function INT get_memory_limit()
 
 Return the current memory limit in bytes.
+
+$Function VOID set_epoch_deadline(INT ms)
+
+$Restrict vcl_init
+
+Set epoch-based execution deadline in milliseconds. Default 100ms.
+Runaway modules (infinite loops) are interrupted after this duration. Example::
+
+    wasm.set_epoch_deadline(50);
+
+$Function INT get_epoch_deadline()
+
+Return the current epoch deadline in milliseconds.
 
 $Function INT proxy_wasm_on_request(STRING module)
 
@@ -123,3 +124,53 @@ $Function STRING get_metrics_json()
 Return Proxy-Wasm metrics as JSON. Returns "{}" if empty. Example::
 
     synthetic(wasm.get_metrics_json());
+
+$Function VOID set_store_pool_size(STRING module, INT size)
+
+$Restrict vcl_init
+
+Set number of pre-warmed stores for a module. Larger pools reduce instantiation
+latency under concurrency. Must be called after load(). Example::
+
+    wasm.set_store_pool_size("auth", 32);
+
+$Function VOID set_http_pool_size(INT size)
+
+$Restrict vcl_init
+
+Set maximum number of persistent HTTP connections in the pool. Example::
+
+    wasm.set_http_pool_size(64);
+
+$Function INT filter_chain(STRING chain_spec)
+
+$Restrict client
+
+Execute a chain of modules on request headers/body. Modules are separated
+by "|". Returns 0 on success, -1 on error. Any module returning PAUSE
+short-circuits the chain. Example::
+
+    if (wasm.filter_chain("rate_limit|auth|transform") != 0) {
+        return (synth(500, "Filter chain error"));
+    }
+
+$Function INT filter_chain_response(STRING chain_spec)
+
+$Restrict vcl_backend_response vcl_deliver
+
+Execute a chain of modules on response headers/body. Same semantics as
+filter_chain but operates on response phase. Example::
+
+    wasm.filter_chain_response("compress|redact");
+
+$Function STRING get_pool_stats_json(STRING module)
+
+Return store pool statistics for a module as JSON. Example::
+
+    set resp.http.X-Pool = wasm.get_pool_stats_json("auth");
+
+$Function STRING get_http_pool_stats_json()
+
+Return HTTP connection pool statistics as JSON. Example::
+
+    synthetic(wasm.get_http_pool_stats_json());

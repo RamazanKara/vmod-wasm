@@ -1,9 +1,9 @@
-varnishtest "vmod-wasm: fuel exhaustion stops runaway modules"
+varnishtest "vmod-wasm: epoch deadline stops runaway modules"
 
 # This test verifies:
-# 1. An infinite loop Wasm function is stopped by fuel exhaustion
+# 1. An infinite loop Wasm function is stopped by epoch-based interruption
 # 2. The request completes with an error (fail-open) instead of hanging
-# 3. Normal execution still works after a fuel trap
+# 3. Normal execution still works after a trapped execution
 
 server s1 {
     rxreq
@@ -17,8 +17,9 @@ varnish v1 -vcl+backend {
 
     sub vcl_init {
         wasm.load("test", "${wasm_module}");
-        # Use a small fuel limit to ensure the infinite loop runs out quickly
-        wasm.set_fuel(10000);
+        # Epoch deadline is configured by default (100ms).
+        # Infinite loops are stopped by epoch-based interruption.
+        wasm.set_epoch_deadline(50);
     }
 
     sub vcl_recv {
@@ -30,7 +31,7 @@ varnish v1 -vcl+backend {
     }
 } -start
 
-# Test 1: infinite_loop should be stopped by fuel exhaustion, returning -1
+# Test 1: infinite_loop should be stopped by epoch deadline, returning -1
 client c1 {
     txreq -url "/" -hdr "X-Wasm-Func: infinite_loop"
     rxresp

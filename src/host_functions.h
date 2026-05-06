@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Host functions exposed to Wasm modules — provides access to
@@ -45,5 +45,11 @@ struct vwasm_host_ctx {
  *   env.log_msg(level, msg_ptr, msg_len) -> void
  */
 int vwasm_host_define_imports(wasmtime_linker_t *linker);
+
+/*
+ * Define WASI stubs for wasm32-wasi modules.
+ * Registers minimal implementations under "wasi_snapshot_preview1".
+ */
+int vwasm_host_define_wasi(wasmtime_linker_t *linker);
 
 #endif /* HOST_FUNCTIONS_H */

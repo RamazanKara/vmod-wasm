@@ -11,7 +11,6 @@ varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
 
     sub vcl_init {
         wasm.load("sdk", "${sdk_module}");
-        wasm.set_fuel(100000000);
     }
 
     sub vcl_recv {

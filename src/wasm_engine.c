@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Wasmtime engine wrapper — handles module compilation, instantiation,
@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 #include <wasm.h>
 #include <wasmtime.h>
@@ -24,6 +25,8 @@
 #include "proxy_wasm.h"
 #include "proxy_wasm_shared.h"
 #include "vdp_wasm.h"
+#include "store_pool.h"
+#include "http_pool.h"
 
 #define MAX_MODULES 64
 #define VWASM_MAX_BODY_CACHE	(1024 * 1024)  /* 1 MiB max body to cache */
@@ -35,14 +38,28 @@ struct wasm_module_entry {
 	wasmtime_instance_pre_t	*instance_pre;
 };
 
+/* Per-module tick timer state */
+struct vwasm_tick_timer {
+	pthread_t		thread;
+	volatile int		running;
+	uint32_t		period_ms;
+	struct vwasm_engine	*engine;
+	int			module_idx;
+};
+
 struct vwasm_engine {
 	wasm_engine_t		*engine;
 	wasmtime_linker_t	*linker;
 	struct wasm_module_entry	modules[MAX_MODULES];
 	int			nmodules;
 	/* Execution limits (set once in vcl_init, immutable after) */
-	uint64_t		fuel_limit;
 	size_t			memory_limit;
+	/* Epoch-based interruption for execution time limiting */
+	uint64_t		epoch_deadline_ms;
+	pthread_t		epoch_thread;
+	volatile int		epoch_running;
+	/* HTTP call configuration */
+	uint32_t		http_timeout_ms;
 	/* Security configuration */
 	char			**allowed_upstreams;
 	uint32_t		num_allowed_upstreams;
@@ -50,7 +67,127 @@ struct vwasm_engine {
 	int			fail_mode;
 	/* Execution statistics */
 	struct vwasm_stats	stats;
+	/* Phase 1+2: Warm instances and store pools (per module) */
+	struct vwasm_warm_instance warm_instances[MAX_MODULES];
+	struct vwasm_store_pool	*pools[MAX_MODULES];
+	size_t			store_pool_size;
+	/* Phase 3: HTTP connection pool (shared across modules) */
+	struct vwasm_http_pool	*http_pool;
+	/* Tick timers (per-module, started by proxy_set_tick_period) */
+	struct vwasm_tick_timer	*tick_timers[MAX_MODULES];
 };
+
+/* ----------------------------------------------------------------
+ * Epoch timer thread — increments the engine epoch every 1ms.
+ * Used by epoch-based interruption for low-overhead timeout protection.
+ * ---------------------------------------------------------------- */
+
+static void *
+epoch_timer_thread(void *arg)
+{
+	struct vwasm_engine *e = arg;
+	struct timespec ts;
+
+	ts.tv_sec = 0;
+	ts.tv_nsec = VWASM_EPOCH_TICK_MS * 1000000L;
+
+	while (e->epoch_running) {
+		nanosleep(&ts, NULL);
+		if (e->epoch_running)
+			wasmtime_engine_increment_epoch(e->engine);
+	}
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
+ * Tick timer thread — fires proxy_on_tick at configured interval.
+ * Each module with a non-zero tick period gets its own thread.
+ * ---------------------------------------------------------------- */
+
+static void *
+tick_timer_thread(void *arg)
+{
+	struct vwasm_tick_timer *tt = arg;
+	struct vwasm_engine *engine = tt->engine;
+	struct wasm_module_entry *entry;
+	wasmtime_store_t *store;
+	wasmtime_context_t *wctx;
+	wasmtime_instance_t instance;
+	wasmtime_error_t *error;
+	wasm_trap_t *trap;
+	wasmtime_extern_t tick_fn;
+	wasmtime_val_t tick_args[2];
+	wasmtime_val_t tick_result;
+	struct vwasm_proxy_ctx pctx;
+	struct timespec ts;
+	int found;
+
+	entry = &engine->modules[tt->module_idx];
+
+	while (tt->running) {
+		/* Sleep for tick period */
+		ts.tv_sec = tt->period_ms / 1000;
+		ts.tv_nsec = (long)(tt->period_ms % 1000) * 1000000L;
+		nanosleep(&ts, NULL);
+
+		if (!tt->running)
+			break;
+
+		/* Create a fresh store for this tick invocation */
+		store = wasmtime_store_new(engine->engine, NULL, NULL);
+		if (store == NULL)
+			continue;
+
+		wctx = wasmtime_store_context(store);
+		wasmtime_context_set_epoch_deadline(wctx,
+		    engine->epoch_deadline_ms > 0 ?
+		    engine->epoch_deadline_ms : 5000);
+
+		/* Instantiate the module */
+		error = wasmtime_linker_instantiate(engine->linker, wctx,
+		    entry->module, &instance, &trap);
+		if (error != NULL || trap != NULL) {
+			if (error) wasmtime_error_delete(error);
+			if (trap) wasm_trap_delete(trap);
+			wasmtime_store_delete(store);
+			continue;
+		}
+
+		/* Look up proxy_on_tick export */
+		found = wasmtime_instance_export_get(wctx, &instance,
+		    "proxy_on_tick", 13, &tick_fn);
+		if (!found || tick_fn.kind != WASMTIME_EXTERN_FUNC) {
+			wasmtime_store_delete(store);
+			/* Module doesn't export proxy_on_tick, stop timer */
+			tt->running = 0;
+			break;
+		}
+
+		/* Set up minimal context for the tick */
+		memset(&pctx, 0, sizeof(pctx));
+		pctx.engine = engine;
+		pctx.wasm_ctx = wctx;
+		pctx.root_context_id = 1;
+		pctx.module_name = entry->name;
+		wasmtime_context_set_data(wctx, &pctx);
+
+		/* Call proxy_on_tick(root_context_id) */
+		tick_args[0].kind = WASMTIME_I32;
+		tick_args[0].of.i32 = 1;  /* root_context_id */
+
+		trap = NULL;
+		error = wasmtime_func_call(wctx, &tick_fn.of.func,
+		    tick_args, 1, &tick_result, 0, &trap);
+		if (error != NULL)
+			wasmtime_error_delete(error);
+		if (trap != NULL)
+			wasm_trap_delete(trap);
+
+		vwasm_proxy_ctx_cleanup(&pctx);
+		wasmtime_store_delete(store);
+	}
+	return (NULL);
+}
 
 struct vwasm_engine *
 vwasm_engine_new(void)
@@ -68,8 +205,8 @@ vwasm_engine_new(void)
 		return (NULL);
 	}
 
-	/* Enable fuel consumption for execution limits */
-	wasmtime_config_consume_fuel_set(config, true);
+	/* Enable epoch-based interruption (low per-instruction overhead) */
+	wasmtime_config_epoch_interruption_set(config, true);
 
 	/* Set maximum Wasm call stack size */
 	wasmtime_config_max_wasm_stack_set(config, VWASM_DEFAULT_STACKSIZE);
@@ -95,6 +232,13 @@ vwasm_engine_new(void)
 		return (NULL);
 	}
 
+	if (vwasm_host_define_wasi(e->linker) != 0) {
+		wasmtime_linker_delete(e->linker);
+		wasm_engine_delete(e->engine);
+		free(e);
+		return (NULL);
+	}
+
 	if (vwasm_proxy_wasm_define_imports(e->linker) != 0) {
 		wasmtime_linker_delete(e->linker);
 		wasm_engine_delete(e->engine);
@@ -103,12 +247,23 @@ vwasm_engine_new(void)
 	}
 
 	e->nmodules = 0;
-	e->fuel_limit = VWASM_DEFAULT_FUEL;
 	e->memory_limit = VWASM_DEFAULT_MEMLIMIT;
+	e->epoch_deadline_ms = VWASM_DEFAULT_EPOCH_DEADLINE_MS;
+	e->http_timeout_ms = VWASM_DEFAULT_HTTP_TIMEOUT_MS;
 	e->allowed_upstreams = NULL;
 	e->num_allowed_upstreams = 0;
 	e->http_call_max = VWASM_DEFAULT_HTTP_CALL_MAX;
 	e->fail_mode = VWASM_FAIL_CLOSED;
+
+	/* Start epoch timer thread */
+	e->epoch_running = 1;
+	if (pthread_create(&e->epoch_thread, NULL,
+	    epoch_timer_thread, e) != 0) {
+		wasmtime_linker_delete(e->linker);
+		wasm_engine_delete(e->engine);
+		free(e);
+		return (NULL);
+	}
 
 	return (e);
 }
@@ -124,6 +279,10 @@ vwasm_engine_destroy(struct vwasm_engine **enginep)
 
 	e = *enginep;
 	*enginep = NULL;
+
+	/* Stop epoch timer thread */
+	e->epoch_running = 0;
+	pthread_join(e->epoch_thread, NULL);
 
 	for (i = 0; i < e->nmodules; i++) {
 		free(e->modules[i].name);
@@ -141,20 +300,29 @@ vwasm_engine_destroy(struct vwasm_engine **enginep)
 		free(e->allowed_upstreams);
 	}
 
+	/* Phase 1+2: Destroy pools and warm instances */
+	vwasm_engine_destroy_pools(e);
+
+	/* Phase 3: Destroy HTTP pool */
+	if (e->http_pool != NULL)
+		vwasm_http_pool_destroy(&e->http_pool);
+
+	/* Stop and free tick timers */
+	for (i = 0; i < MAX_MODULES; i++) {
+		if (e->tick_timers[i] != NULL) {
+			e->tick_timers[i]->running = 0;
+			pthread_join(e->tick_timers[i]->thread, NULL);
+			free(e->tick_timers[i]);
+			e->tick_timers[i] = NULL;
+		}
+	}
+
 	free(e);
 }
 
 /* ----------------------------------------------------------------
  * Configuration setters/getters (thread-safe via rwlock)
  * ---------------------------------------------------------------- */
-
-void
-vwasm_engine_set_fuel(struct vwasm_engine *engine, uint64_t fuel)
-{
-	if (engine == NULL)
-		return;
-	engine->fuel_limit = fuel;
-}
 
 void
 vwasm_engine_set_memory_limit(struct vwasm_engine *engine, size_t bytes)
@@ -164,20 +332,64 @@ vwasm_engine_set_memory_limit(struct vwasm_engine *engine, size_t bytes)
 	engine->memory_limit = bytes;
 }
 
-uint64_t
-vwasm_engine_get_fuel(struct vwasm_engine *engine)
-{
-	if (engine == NULL)
-		return (VWASM_DEFAULT_FUEL);
-	return (engine->fuel_limit);
-}
-
 size_t
 vwasm_engine_get_memory_limit(struct vwasm_engine *engine)
 {
 	if (engine == NULL)
 		return (VWASM_DEFAULT_MEMLIMIT);
 	return (engine->memory_limit);
+}
+
+/* ----------------------------------------------------------------
+ * Epoch-based interruption setters/getters
+ * ---------------------------------------------------------------- */
+
+void
+vwasm_engine_set_epoch_deadline(struct vwasm_engine *engine, uint64_t ms)
+{
+	if (engine == NULL)
+		return;
+	engine->epoch_deadline_ms = ms;
+}
+
+uint64_t
+vwasm_engine_get_epoch_deadline(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (VWASM_DEFAULT_EPOCH_DEADLINE_MS);
+	return (engine->epoch_deadline_ms);
+}
+
+void
+vwasm_engine_reset_epoch_deadline(struct vwasm_engine *engine,
+    wasmtime_context_t *context)
+{
+	if (engine == NULL || context == NULL)
+		return;
+	wasmtime_context_set_epoch_deadline(context,
+	    engine->epoch_deadline_ms);
+}
+
+/* ----------------------------------------------------------------
+ * HTTP timeout setters/getters
+ * ---------------------------------------------------------------- */
+
+void
+vwasm_engine_set_http_timeout(struct vwasm_engine *engine, uint32_t ms)
+{
+	if (engine == NULL)
+		return;
+	if (ms > 30000)
+		ms = 30000;  /* Cap at 30s */
+	engine->http_timeout_ms = ms;
+}
+
+uint32_t
+vwasm_engine_get_http_timeout(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (VWASM_DEFAULT_HTTP_TIMEOUT_MS);
+	return (engine->http_timeout_ms);
 }
 
 /* ----------------------------------------------------------------
@@ -462,7 +674,6 @@ vwasm_engine_call(struct vwasm_engine *engine,
 	wasmtime_extern_t item;
 	wasmtime_val_t results[1];
 	struct vwasm_host_ctx host_ctx;
-	uint64_t fuel_limit, fuel_remaining;
 	size_t mem_limit;
 	int ret = -1;
 
@@ -470,7 +681,6 @@ vwasm_engine_call(struct vwasm_engine *engine,
 		return (-1);
 
 	/* Read current limits */
-	fuel_limit = engine->fuel_limit;
 	mem_limit = engine->memory_limit;
 
 	/* Find the pre-compiled module */
@@ -491,8 +701,9 @@ vwasm_engine_call(struct vwasm_engine *engine,
 
 	context = wasmtime_store_context(store);
 
-	/* Set fuel limit for this execution */
-	wasmtime_context_set_fuel(context, fuel_limit);
+	/* Set epoch deadline for this execution */
+	wasmtime_context_set_epoch_deadline(context,
+	    engine->epoch_deadline_ms);
 
 	/* Set memory limiter — cap linear memory growth */
 	wasmtime_store_limiter(store, (int64_t)mem_limit, -1, -1, -1, -1);
@@ -541,13 +752,10 @@ vwasm_engine_call(struct vwasm_engine *engine,
 
 	/* Log execution metrics to VSL */
 	if (ctx != NULL && ctx->vsl != NULL) {
-		fuel_remaining = 0;
-		wasmtime_context_get_fuel(context, &fuel_remaining);
 		VSLb(ctx->vsl, SLT_Debug,
-		    "wasm: %s.%s ok, fuel=%llu/%llu used",
+		    "wasm: %s.%s ok (epoch-guarded, %llums deadline)",
 		    module_name, func_name,
-		    (unsigned long long)(fuel_limit - fuel_remaining),
-		    (unsigned long long)fuel_limit);
+		    (unsigned long long)engine->epoch_deadline_ms);
 	}
 
 cleanup:
@@ -697,9 +905,10 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	struct vwasm_proxy_ctx proxy_ctx;
 	wasmtime_val_t args[3];
 	int32_t action;
-	uint64_t fuel_limit;
 	size_t mem_limit;
 	int ret = -1;
+	int pool_idx;
+	struct vwasm_pooled_store *pooled = NULL;
 	int num_headers;
 	const struct http *hp;
 	size_t vm_config_len;
@@ -723,7 +932,6 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	    "proxy_on_request_body" : "proxy_on_response_body";
 
 	/* Read current limits */
-	fuel_limit = engine->fuel_limit;
 	mem_limit = engine->memory_limit;
 
 	/* Find the pre-compiled module */
@@ -732,9 +940,16 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	if (entry == NULL)
 		return (-1);
 
+	/* Try to acquire a pre-warmed store from the pool */
+	pool_idx = (int)(entry - engine->modules);
+	if (pool_idx >= 0 && pool_idx < MAX_MODULES &&
+	    engine->pools[pool_idx] != NULL)
+		pooled = vwasm_store_pool_acquire(engine->pools[pool_idx]);
+
 	/* Set up proxy-wasm context */
 	memset(&proxy_ctx, 0, sizeof(proxy_ctx));
 	proxy_ctx.vrt_ctx = ctx;
+	proxy_ctx.engine = engine;
 	proxy_ctx.root_context_id = 1;
 	proxy_ctx.stream_context_id = 2;
 	proxy_ctx.module_name = module_name;
@@ -746,33 +961,49 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	proxy_ctx.queue_store = vwasm_proxy_wasm_get_queue_store();
 	proxy_ctx.metric_store = vwasm_proxy_wasm_get_metric_store();
 	proxy_ctx.http_call_max = engine->http_call_max;
+	proxy_ctx.http_timeout_ms = engine->http_timeout_ms;
 	proxy_ctx.allowed_upstreams = (const char **)engine->allowed_upstreams;
 	proxy_ctx.num_allowed_upstreams = engine->num_allowed_upstreams;
-	proxy_ctx.fuel_limit = fuel_limit;
 
-	/* Create a per-call store with proxy context as data */
 	clock_gettime(CLOCK_MONOTONIC, &ts_start);
-	store = wasmtime_store_new(engine->engine, &proxy_ctx, NULL);
-	if (store == NULL)
-		return (-1);
 
-	context = wasmtime_store_context(store);
-	proxy_ctx.wasm_ctx = context;
+	if (pooled != NULL) {
+		/* Fast path: reuse pre-warmed store from pool */
+		store = pooled->store;
+		context = pooled->context;
+		instance = pooled->instance;
+		/* Update store data to point to our stack proxy_ctx */
+		wasmtime_context_set_data(context, &proxy_ctx);
+		proxy_ctx.wasm_ctx = context;
+		/* Reset epoch deadline for this call */
+		wasmtime_context_set_epoch_deadline(context,
+		    engine->epoch_deadline_ms);
+	} else {
+		/* Slow path: create fresh store and instantiate */
+		store = wasmtime_store_new(engine->engine, &proxy_ctx, NULL);
+		if (store == NULL)
+			return (-1);
 
-	/* Set execution limits */
-	wasmtime_context_set_fuel(context, fuel_limit);
-	wasmtime_store_limiter(store, (int64_t)mem_limit, -1, -1, -1, -1);
+		context = wasmtime_store_context(store);
+		proxy_ctx.wasm_ctx = context;
 
-	/* Instantiate from pre-validated instance */
-	error = wasmtime_instance_pre_instantiate(entry->instance_pre,
-	    context, &instance, &trap);
-	if (error != NULL) {
-		log_error(ctx, error, module_name, "instantiate");
-		goto cleanup;
-	}
-	if (trap != NULL) {
-		log_trap(ctx, trap, module_name, "instantiate");
-		goto cleanup;
+		/* Set epoch deadline and memory limiter */
+		wasmtime_context_set_epoch_deadline(context,
+		    engine->epoch_deadline_ms);
+		wasmtime_store_limiter(store, (int64_t)mem_limit,
+		    -1, -1, -1, -1);
+
+		/* Instantiate from pre-validated instance */
+		error = wasmtime_instance_pre_instantiate(
+		    entry->instance_pre, context, &instance, &trap);
+		if (error != NULL) {
+			log_error(ctx, error, module_name, "instantiate");
+			goto cleanup;
+		}
+		if (trap != NULL) {
+			log_trap(ctx, trap, module_name, "instantiate");
+			goto cleanup;
+		}
 	}
 
 	/* Resolve "memory" export */
@@ -860,6 +1091,13 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 		goto cleanup;
 	}
 
+	/* Check if module paused the stream (action == 1) */
+	if (action == 1) {
+		proxy_ctx.paused = 1;
+		ret = 0;
+		goto cleanup;
+	}
+
 	/* 6. Body callback — pass actual body if available */
 	has_body_handler = wasmtime_instance_export_get(context, &instance,
 	    phase_body_fn, strlen(phase_body_fn), &item) &&
@@ -922,6 +1160,8 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 		task->instance = instance;
 		task->phase_body_fn = phase_body_fn;
 		task->ts_start = ts_start;
+		task->pooled = pooled;
+		task->pool_idx = pool_idx;
 		/* Move proxy_ctx to heap (task owns it now) */
 		memcpy(&task->proxy_ctx, &proxy_ctx, sizeof(proxy_ctx));
 		/* Update wasmtime store data to point to new proxy_ctx location */
@@ -931,7 +1171,11 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 		tp = VRT_priv_task(ctx, vdp_wasm_task_id);
 		if (tp == NULL) {
 			vwasm_proxy_ctx_cleanup(&task->proxy_ctx);
-			wasmtime_store_delete(store);
+			if (pooled != NULL)
+				vwasm_store_pool_release(
+				    engine->pools[pool_idx], pooled);
+			else
+				wasmtime_store_delete(store);
 			free(task);
 			goto cleanup;
 		}
@@ -951,6 +1195,7 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 		 */
 		memset(&proxy_ctx, 0, sizeof(proxy_ctx));
 		store = NULL;
+		pooled = NULL;
 		*status_code = 0;
 		return ((int)action);
 	}
@@ -1022,7 +1267,9 @@ cleanup:
 		wasmtime_error_delete(error);
 	if (trap != NULL)
 		wasm_trap_delete(trap);
-	if (store != NULL)
+	if (pooled != NULL)
+		vwasm_store_pool_release(engine->pools[pool_idx], pooled);
+	else if (store != NULL)
 		wasmtime_store_delete(store);
 	return (ret);
 }
@@ -1072,3 +1319,319 @@ vwasm_proxy_wasm_response_call_with_config(struct vwasm_engine *engine,
 	return (proxy_wasm_execute(engine, ctx, module_name,
 	    VWASM_PHASE_RESPONSE, vm_config, plugin_config, status_code));
 }
+
+/* ================================================================
+ * Phase 1+2: Store Pool and Warm Instance Management
+ * ================================================================ */
+
+/* Accessor functions used by store_pool.c */
+
+wasm_engine_t *
+vwasm_engine_get_wasm_engine(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (NULL);
+	return (engine->engine);
+}
+
+uint64_t
+vwasm_engine_get_epoch_deadline_ms(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (100);
+	return (engine->epoch_deadline_ms);
+}
+
+size_t
+vwasm_engine_get_mem_limit(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (VWASM_DEFAULT_MEMLIMIT);
+	return (engine->memory_limit);
+}
+
+struct wasm_module_entry *
+vwasm_engine_find_module(struct vwasm_engine *engine, const char *name)
+{
+	if (engine == NULL || name == NULL)
+		return (NULL);
+	return (find_module(engine, name));
+}
+
+/*
+ * Initialize warm instance and store pool for a specific module.
+ */
+int
+vwasm_engine_init_pool(struct vwasm_engine *engine,
+    const char *module_name, size_t pool_size,
+    const char *vm_config, const char *plugin_config)
+{
+	struct wasm_module_entry *entry;
+	int idx;
+
+	if (engine == NULL || module_name == NULL)
+		return (-1);
+
+	/* Find module index */
+	entry = find_module(engine, module_name);
+	if (entry == NULL)
+		return (-1);
+
+	idx = (int)(entry - engine->modules);
+	if (idx < 0 || idx >= MAX_MODULES)
+		return (-1);
+
+	/* Default pool size */
+	if (pool_size == 0)
+		pool_size = VWASM_DEFAULT_STORE_POOL_SIZE;
+	engine->store_pool_size = pool_size;
+
+	/* Create warm instance (runs init lifecycle, captures snapshot) */
+	if (vwasm_warm_instance_create(&engine->warm_instances[idx],
+	    engine, entry, vm_config, plugin_config) != 0)
+		return (-1);
+
+	/* Create store pool pre-warmed with the snapshot */
+	engine->pools[idx] = vwasm_store_pool_new(pool_size,
+	    &engine->warm_instances[idx], engine, entry);
+	if (engine->pools[idx] == NULL) {
+		vwasm_warm_instance_destroy(&engine->warm_instances[idx]);
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * Destroy all pools and warm instances.
+ */
+void
+vwasm_engine_destroy_pools(struct vwasm_engine *engine)
+{
+	int i;
+
+	if (engine == NULL)
+		return;
+
+	for (i = 0; i < MAX_MODULES; i++) {
+		if (engine->pools[i] != NULL)
+			vwasm_store_pool_destroy(&engine->pools[i]);
+		if (engine->warm_instances[i].valid)
+			vwasm_warm_instance_destroy(
+			    &engine->warm_instances[i]);
+	}
+}
+
+/*
+ * Get pool stats JSON for a module (caller must free).
+ */
+char *
+vwasm_engine_get_pool_stats_json(struct vwasm_engine *engine,
+    const char *module_name)
+{
+	struct wasm_module_entry *entry;
+	int idx;
+
+	if (engine == NULL || module_name == NULL)
+		return (NULL);
+
+	entry = find_module(engine, module_name);
+	if (entry == NULL)
+		return (NULL);
+
+	idx = (int)(entry - engine->modules);
+	if (idx < 0 || idx >= MAX_MODULES || engine->pools[idx] == NULL)
+		return (NULL);
+
+	return (vwasm_store_pool_stats_json(engine->pools[idx]));
+}
+
+/* ================================================================
+ * Phase 3: HTTP Connection Pool
+ * ================================================================ */
+
+int
+vwasm_engine_init_http_pool(struct vwasm_engine *engine, size_t pool_size)
+{
+	if (engine == NULL)
+		return (-1);
+
+	if (engine->http_pool != NULL)
+		vwasm_http_pool_destroy(&engine->http_pool);
+
+	if (pool_size == 0)
+		pool_size = VWASM_DEFAULT_HTTP_POOL_SIZE;
+
+	engine->http_pool = vwasm_http_pool_new(pool_size,
+	    engine->http_timeout_ms);
+	if (engine->http_pool == NULL)
+		return (-1);
+
+	return (0);
+}
+
+struct vwasm_http_pool *
+vwasm_engine_get_http_pool(struct vwasm_engine *engine)
+{
+	if (engine == NULL)
+		return (NULL);
+	return (engine->http_pool);
+}
+
+char *
+vwasm_engine_get_http_pool_stats_json(struct vwasm_engine *engine)
+{
+	if (engine == NULL || engine->http_pool == NULL)
+		return (NULL);
+	return (vwasm_http_pool_stats_json(engine->http_pool));
+}
+
+/* ================================================================
+ * Phase 4: Filter Chain
+ * ================================================================ */
+
+/*
+ * Parse a comma-separated chain specification into module names.
+ * Returns the count of parsed names.
+ * Names array must be at least VWASM_CHAIN_MAX_FILTERS in size.
+ * Caller must free each name after use.
+ */
+static int
+parse_chain_spec(const char *chain_spec, char **names, int max_names)
+{
+	const char *p, *start;
+	int count = 0;
+
+	if (chain_spec == NULL || names == NULL)
+		return (0);
+
+	p = chain_spec;
+	while (*p != '\0' && count < max_names) {
+		/* Skip leading whitespace and commas */
+		while (*p == ',' || *p == ' ' || *p == '\t')
+			p++;
+		if (*p == '\0')
+			break;
+
+		start = p;
+		/* Find end of name */
+		while (*p != ',' && *p != '\0' && *p != ' ' && *p != '\t')
+			p++;
+
+		if (p > start) {
+			size_t len = (size_t)(p - start);
+			names[count] = malloc(len + 1);
+			if (names[count] == NULL)
+				break;
+			memcpy(names[count], start, len);
+			names[count][len] = '\0';
+			count++;
+		}
+	}
+
+	return (count);
+}
+
+int
+vwasm_filter_chain_request(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char **modules, int nmodules,
+    int *status_code)
+{
+	int i, ret;
+
+	if (engine == NULL || ctx == NULL || modules == NULL || nmodules <= 0)
+		return (-1);
+
+	*status_code = 0;
+
+	for (i = 0; i < nmodules; i++) {
+		ret = proxy_wasm_execute(engine, ctx, modules[i],
+		    VWASM_PHASE_REQUEST, NULL, NULL, status_code);
+
+		if (ret != 0) {
+			/* Non-CONTINUE action: short-circuit */
+			return (ret);
+		}
+	}
+
+	return (0);  /* All filters passed */
+}
+
+int
+vwasm_filter_chain_response(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char **modules, int nmodules,
+    int *status_code)
+{
+	int i, ret;
+
+	if (engine == NULL || ctx == NULL || modules == NULL || nmodules <= 0)
+		return (-1);
+
+	*status_code = 0;
+
+	for (i = 0; i < nmodules; i++) {
+		ret = proxy_wasm_execute(engine, ctx, modules[i],
+		    VWASM_PHASE_RESPONSE, NULL, NULL, status_code);
+
+		if (ret != 0)
+			return (ret);
+	}
+
+	return (0);
+}
+
+/* ----------------------------------------------------------------
+ * Tick timer management
+ * ---------------------------------------------------------------- */
+
+int
+vwasm_engine_set_tick_period(struct vwasm_engine *engine,
+    const char *module_name, uint32_t period_ms)
+{
+	struct wasm_module_entry *entry;
+	struct vwasm_tick_timer *tt;
+	int idx;
+
+	if (engine == NULL || module_name == NULL)
+		return (-1);
+
+	entry = find_module(engine, module_name);
+	if (entry == NULL)
+		return (-1);
+
+	idx = (int)(entry - engine->modules);
+	if (idx < 0 || idx >= MAX_MODULES)
+		return (-1);
+
+	/* Stop existing timer if running */
+	if (engine->tick_timers[idx] != NULL) {
+		engine->tick_timers[idx]->running = 0;
+		pthread_join(engine->tick_timers[idx]->thread, NULL);
+		free(engine->tick_timers[idx]);
+		engine->tick_timers[idx] = NULL;
+	}
+
+	/* period_ms == 0 means disable tick */
+	if (period_ms == 0)
+		return (0);
+
+	tt = calloc(1, sizeof(*tt));
+	if (tt == NULL)
+		return (-1);
+
+	tt->period_ms = period_ms;
+	tt->engine = engine;
+	tt->module_idx = idx;
+	tt->running = 1;
+
+	if (pthread_create(&tt->thread, NULL, tick_timer_thread, tt) != 0) {
+		free(tt);
+		return (-1);
+	}
+
+	engine->tick_timers[idx] = tt;
+	return (0);
+}
+

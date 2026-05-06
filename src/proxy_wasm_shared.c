@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Proxy-Wasm shared data and queue implementation.

@@ -1,12 +1,11 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * VDP (Varnish Delivery Processor) for Proxy-Wasm response body access.
  *
- * This VDP intercepts response body bytes as they are delivered to the
- * client, buffers them, and invokes proxy_on_response_body with the
- * complete body when delivery finishes.
+ * Streaming mode: each body chunk is passed to proxy_on_response_body
+ * immediately, then forwarded to the client.  No buffering.
  */
 
 #ifndef VWASM_VDP_WASM_H
@@ -23,6 +22,7 @@ struct vfp;
 struct vmod_priv_methods;
 
 struct vwasm_engine;
+struct vwasm_pooled_store;
 
 /*
  * VRT filter registration — declared in cache_filter.h but we
@@ -45,15 +45,39 @@ struct vdp_wasm_task {
 	struct vwasm_proxy_ctx	 proxy_ctx;
 	const char		*phase_body_fn;
 	struct timespec		 ts_start;
+	struct vwasm_pooled_store *pooled;
+	int			 pool_idx;
 };
 
 /* The VDP descriptor — registered via VRT_AddFilter */
 extern const struct vdp vdp_wasm_body;
 
+/* Phase 4: Filter chain VDP — runs multiple filters on each chunk */
+extern const struct vdp vdp_wasm_chain_body;
+
+/*
+ * Chain task: array of module tasks for filter chain VDP.
+ * Each body chunk passes through all filters in sequence.
+ */
+#define VDP_WASM_CHAIN_MAX	16
+
+struct vdp_wasm_chain_task {
+	unsigned		 magic;
+#define VDP_WASM_CHAIN_MAGIC	 0x57444343	/* "WDCC" */
+	struct vwasm_engine	*engine;
+	struct vdp_wasm_task	 tasks[VDP_WASM_CHAIN_MAX];
+	int			 ntasks;
+	struct timespec		 ts_start;
+};
+
 /* PRIV_TASK identifier (address used as unique key) */
 extern const void *vdp_wasm_task_id;
 
+/* PRIV_TASK identifier for chain tasks */
+extern const void *vdp_wasm_chain_task_id;
+
 /* PRIV_TASK methods (for cleanup if VDP never runs) */
 extern const struct vmod_priv_methods vdp_wasm_task_methods;
+extern const struct vmod_priv_methods vdp_wasm_chain_task_methods;
 
 #endif /* VWASM_VDP_WASM_H */

@@ -75,6 +75,11 @@ case "$host_os" in
         ;;
 esac
 
+# Portability checks
+AC_CHECK_FUNCS([strlcpy])
+AC_CHECK_LIB([rt], [clock_gettime])
+
+
 AC_CONFIG_FILES([
     Makefile
     src/Makefile

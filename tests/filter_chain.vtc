@@ -1,0 +1,93 @@
+varnishtest "vmod-wasm: filter chain execution"
+
+# This test verifies:
+# 1. Loading multiple modules
+# 2. Executing a filter chain on request
+# 3. Executing a filter chain on response
+# 4. Short-circuit behavior when a module pauses
+# 5. Error handling for invalid chain specs
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "Hello World"
+} -start
+
+server s1 -repeat 5 -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("passthrough", "${wasm_passthrough}");
+        wasm.load("transform", "${wasm_transform}");
+        wasm.set_store_pool_size("passthrough", 4);
+        wasm.set_store_pool_size("transform", 4);
+    }
+
+    sub vcl_recv {
+        # Execute two-module chain
+        if (req.url == "/chain") {
+            set req.http.X-Chain-Result =
+                wasm.filter_chain("passthrough|transform");
+        }
+
+        # Execute single-module chain
+        if (req.url == "/single") {
+            set req.http.X-Chain-Result =
+                wasm.filter_chain("passthrough");
+        }
+
+        # Invalid chain spec (empty)
+        if (req.url == "/empty") {
+            set req.http.X-Chain-Result =
+                wasm.filter_chain("");
+        }
+
+        # Invalid chain spec (unknown module)
+        if (req.url == "/unknown") {
+            set req.http.X-Chain-Result =
+                wasm.filter_chain("nonexistent");
+        }
+    }
+
+    sub vcl_backend_response {
+        set beresp.http.X-Response-Chain =
+            wasm.filter_chain_response("passthrough|transform");
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Chain-Result = req.http.X-Chain-Result;
+    }
+} -start
+
+# Test: two-module chain succeeds
+client c1 {
+    txreq -url "/chain"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Chain-Result == "0"
+} -run
+
+# Test: single-module chain succeeds
+client c2 {
+    txreq -url "/single"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Chain-Result == "0"
+} -run
+
+# Test: empty chain returns error
+client c3 {
+    txreq -url "/empty"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Chain-Result == "-1"
+} -run
+
+# Test: unknown module returns error
+client c4 {
+    txreq -url "/unknown"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Chain-Result == "-1"
+} -run

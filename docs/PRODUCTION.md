@@ -8,18 +8,19 @@ document covers production deployment considerations.
 
 ## Resource Limits
 
-### Fuel (Instruction Limit)
+### Epoch Deadline (Execution Time Limit)
 
 ```vcl
 sub vcl_init {
-    wasm.set_fuel(10000000);  # Default: 1000000
+    wasm.set_epoch_deadline(100);  # Default: 100ms
 }
 ```
 
-- Controls maximum Wasm instructions per execution
+- Controls maximum wall-clock time per Wasm execution
 - Prevents infinite loops and runaway computations
-- Set based on module complexity: simple filters need ~100K, complex logic ~10M
-- Exceeding fuel causes execution to return -1 (error)
+- Based on epoch-based interruption (low overhead, no per-instruction cost)
+- Exceeding the deadline causes a trap; execution returns -1 (error)
+- Set based on expected module latency: fast filters 50ms, complex logic 200ms
 
 ### Memory Limit
 
@@ -115,7 +116,7 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 
 ## Deployment Checklist
 
-- [ ] Set `set_fuel()` appropriate for module complexity
+- [ ] Set `set_epoch_deadline()` appropriate for expected module latency
 - [ ] Set `set_memory_limit()` (16 MiB default is usually fine)
 - [ ] **Set `set_allowed_upstreams()`** if module uses HTTP callouts
 - [ ] Set `set_http_call_limit()` to prevent amplification
@@ -128,7 +129,7 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 
 - Wasm modules are compiled once at `vcl_init` — instantiation is cheap
 - Each request gets its own Wasm instance (no shared state between requests)
-- Fuel tracking adds ~5% overhead vs unlimited execution
+- Epoch-based time limits have near-zero overhead (no per-instruction cost)
 - Memory limit enforcement is near-zero cost (page fault based)
 - HTTP callouts are synchronous — keep timeouts short
 

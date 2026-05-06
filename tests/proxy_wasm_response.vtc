@@ -10,7 +10,6 @@ varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
 
     sub vcl_init {
         wasm.load("filter", "${wasm_module}");
-        wasm.set_fuel(10000000);
     }
 
     sub vcl_deliver {

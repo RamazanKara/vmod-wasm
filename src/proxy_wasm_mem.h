@@ -1,13 +1,13 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Wasm memory helpers — shared between proxy_wasm_*.c files.
  * Included as static inline for zero-cost abstraction.
  */
 
-#ifndef PROXY_WASM_MEM_H
-#define PROXY_WASM_MEM_H
+#ifndef VWASM_PROXY_WASM_MEM_H
+#define VWASM_PROXY_WASM_MEM_H
 
 #include <string.h>
 #include <wasmtime.h>
@@ -154,4 +154,4 @@ pw_return_string(struct vwasm_proxy_ctx *ctx,
 	    ret_data_offset, ret_size_offset));
 }
 
-#endif /* PROXY_WASM_MEM_H */
+#endif /* VWASM_PROXY_WASM_MEM_H */

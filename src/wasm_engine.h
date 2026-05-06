@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
@@ -7,14 +7,25 @@
 #define VWASM_ENGINE_H
 
 #include <stdint.h>
+#include <wasmtime.h>
+
+#include "store_pool.h"
+#include "http_pool.h"
 
 struct vrt_ctx;
 struct vwasm_engine;
+struct wasm_module_entry;
 
 /* Default execution limits */
-#define VWASM_DEFAULT_FUEL	1000000ULL	/* ~1M instructions */
 #define VWASM_DEFAULT_MEMLIMIT	(16 * 1024 * 1024)	/* 16 MiB */
 #define VWASM_DEFAULT_STACKSIZE	(512 * 1024)		/* 512 KiB */
+
+/* Epoch-based interruption for execution time limiting */
+#define VWASM_DEFAULT_EPOCH_DEADLINE_MS	100	/* 100ms per callback */
+#define VWASM_EPOCH_TICK_MS		1	/* Timer thread ticks every 1ms */
+
+/* Default HTTP timeout for proxy_http_call */
+#define VWASM_DEFAULT_HTTP_TIMEOUT_MS	5000	/* 5 seconds */
 
 /* Create a new Wasm engine (wraps wasmtime_engine_t) */
 struct vwasm_engine *vwasm_engine_new(void);
@@ -33,12 +44,31 @@ int vwasm_engine_call(struct vwasm_engine *engine,
     int *result);
 
 /* Configure execution limits (thread-safe) */
-void vwasm_engine_set_fuel(struct vwasm_engine *engine, uint64_t fuel);
 void vwasm_engine_set_memory_limit(struct vwasm_engine *engine, size_t bytes);
 
 /* Query current limits */
-uint64_t vwasm_engine_get_fuel(struct vwasm_engine *engine);
 size_t vwasm_engine_get_memory_limit(struct vwasm_engine *engine);
+
+/*
+ * Epoch-based interruption.
+ * A background timer thread increments the engine epoch every 1ms.
+ * Callbacks get epoch_deadline_ms milliseconds before trapping.
+ */
+void vwasm_engine_set_epoch_deadline(struct vwasm_engine *engine, uint64_t ms);
+uint64_t vwasm_engine_get_epoch_deadline(struct vwasm_engine *engine);
+
+/*
+ * Reset the epoch deadline on a store context (extend time budget).
+ * Called before each wasm callback phase.
+ */
+void vwasm_engine_reset_epoch_deadline(struct vwasm_engine *engine,
+    wasmtime_context_t *context);
+
+/*
+ * Configurable HTTP timeout for proxy_http_call (milliseconds).
+ */
+void vwasm_engine_set_http_timeout(struct vwasm_engine *engine, uint32_t ms);
+uint32_t vwasm_engine_get_http_timeout(struct vwasm_engine *engine);
 
 /*
  * Execute a Proxy-Wasm module lifecycle for HTTP request filtering.
@@ -144,10 +174,113 @@ struct vwasm_stats {
 	volatile uint64_t	http_calls;
 	volatile uint64_t	http_calls_blocked;  /* SSRF or private IP */
 	volatile uint64_t	body_bytes_in;
-	volatile uint64_t	fuel_total;	/* cumulative fuel consumed */
 };
 
 /* Get pointer to the global stats struct (never NULL after engine_new) */
 struct vwasm_stats *vwasm_engine_get_stats(struct vwasm_engine *engine);
+
+/* ----------------------------------------------------------------
+ * Accessor functions for engine internals (used by store_pool.c)
+ * ---------------------------------------------------------------- */
+
+/* Get the raw wasmtime engine handle */
+wasm_engine_t *vwasm_engine_get_wasm_engine(struct vwasm_engine *engine);
+
+/* Get the epoch deadline in ms */
+uint64_t vwasm_engine_get_epoch_deadline_ms(struct vwasm_engine *engine);
+
+/* Get the memory limit */
+size_t vwasm_engine_get_mem_limit(struct vwasm_engine *engine);
+
+/* Get a module entry by name */
+struct wasm_module_entry *vwasm_engine_find_module(
+    struct vwasm_engine *engine, const char *name);
+
+/* ----------------------------------------------------------------
+ * Phase 1+2: Store Pool Management
+ * ---------------------------------------------------------------- */
+
+/* Default store pool size */
+#define VWASM_DEFAULT_STORE_POOL_SIZE	8
+
+/*
+ * Initialize warm instance and store pool for a module.
+ * Must be called after load_module, typically from vcl_init.
+ * pool_size: 0 for default.
+ */
+int vwasm_engine_init_pool(struct vwasm_engine *engine,
+    const char *module_name, size_t pool_size,
+    const char *vm_config, const char *plugin_config);
+
+/*
+ * Destroy all pools (called from engine_destroy).
+ */
+void vwasm_engine_destroy_pools(struct vwasm_engine *engine);
+
+/*
+ * Get store pool stats JSON for a specific module.
+ * Caller must free returned string.
+ */
+char *vwasm_engine_get_pool_stats_json(struct vwasm_engine *engine,
+    const char *module_name);
+
+/* ----------------------------------------------------------------
+ * Phase 3: HTTP Connection Pool
+ * ---------------------------------------------------------------- */
+
+/* Default HTTP pool size */
+#define VWASM_DEFAULT_HTTP_POOL_SIZE	16
+
+/*
+ * Initialize the shared HTTP connection pool.
+ * pool_size: 0 for default.
+ */
+int vwasm_engine_init_http_pool(struct vwasm_engine *engine,
+    size_t pool_size);
+
+/*
+ * Get the HTTP pool (for use by proxy_wasm_http.c).
+ */
+struct vwasm_http_pool *vwasm_engine_get_http_pool(
+    struct vwasm_engine *engine);
+
+/*
+ * Get HTTP pool stats JSON. Caller must free returned string.
+ */
+char *vwasm_engine_get_http_pool_stats_json(struct vwasm_engine *engine);
+
+/* ----------------------------------------------------------------
+ * Phase 4: Filter Chain
+ * ---------------------------------------------------------------- */
+
+/* Maximum filters in a chain */
+#define VWASM_CHAIN_MAX_FILTERS		16
+
+/*
+ * Execute a filter chain (multiple modules in sequence) for request phase.
+ * modules: array of module names.
+ * nmodules: number of modules.
+ * Returns the first non-CONTINUE action, or 0 if all pass.
+ */
+int vwasm_filter_chain_request(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char **modules, int nmodules,
+    int *status_code);
+
+/*
+ * Execute a filter chain for response phase.
+ */
+int vwasm_filter_chain_response(struct vwasm_engine *engine,
+    const struct vrt_ctx *ctx,
+    const char **modules, int nmodules,
+    int *status_code);
+
+/*
+ * Start or update a tick timer for a module.
+ * Called by proxy_set_tick_period_milliseconds host function.
+ * period_ms=0 stops the timer.
+ */
+int vwasm_engine_set_tick_period(struct vwasm_engine *engine,
+    const char *module_name, uint32_t period_ms);
 
 #endif /* VWASM_ENGINE_H */

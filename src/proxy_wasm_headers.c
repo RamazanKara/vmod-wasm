@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Proxy-Wasm header map operations.
@@ -43,32 +43,133 @@ pw_get_header_map(const struct vwasm_proxy_ctx *ctx, int32_t map_type)
 		return (NULL);
 	case PROXY_MAP_HTTP_REQUEST_TRAILERS:
 	case PROXY_MAP_HTTP_RESPONSE_TRAILERS:
-		return (NULL);
-	default:
-		return (NULL);
-	}
+                return (NULL);  /* trailers handled separately */
+        default:
+                return (NULL);
+        }
 }
 
 static struct http *
 pw_get_header_map_mutable(const struct vwasm_proxy_ctx *ctx, int32_t map_type)
 {
-	const struct vrt_ctx *vctx = ctx->vrt_ctx;
+        const struct vrt_ctx *vctx = ctx->vrt_ctx;
 
-	if (vctx == NULL)
-		return (NULL);
+        if (vctx == NULL)
+                return (NULL);
 
-	switch (map_type) {
-	case PROXY_MAP_HTTP_REQUEST_HEADERS:
-		return ((struct http *)vctx->http_req);
-	case PROXY_MAP_HTTP_RESPONSE_HEADERS:
-		if (vctx->http_resp != NULL)
-			return ((struct http *)vctx->http_resp);
-		if (vctx->http_beresp != NULL)
-			return ((struct http *)vctx->http_beresp);
-		return (NULL);
-	default:
-		return (NULL);
+        switch (map_type) {
+        case PROXY_MAP_HTTP_REQUEST_HEADERS:
+                return ((struct http *)vctx->http_req);
+        case PROXY_MAP_HTTP_RESPONSE_HEADERS:
+                if (vctx->http_resp != NULL)
+                        return ((struct http *)vctx->http_resp);
+                if (vctx->http_beresp != NULL)
+                        return ((struct http *)vctx->http_beresp);
+                return (NULL);
+        default:
+                return (NULL);
+        }
+}
+
+/* ----------------------------------------------------------------
+ * Trailer map helpers
+ * ---------------------------------------------------------------- */
+
+static int
+pw_is_trailer_map(int32_t map_type)
+{
+	return (map_type == PROXY_MAP_HTTP_REQUEST_TRAILERS ||
+	    map_type == PROXY_MAP_HTTP_RESPONSE_TRAILERS);
+}
+
+static struct vwasm_trailer_map *
+pw_get_trailer_map(struct vwasm_proxy_ctx *ctx, int32_t map_type)
+{
+	if (map_type == PROXY_MAP_HTTP_REQUEST_TRAILERS)
+		return (&ctx->request_trailers);
+	if (map_type == PROXY_MAP_HTTP_RESPONSE_TRAILERS)
+		return (&ctx->response_trailers);
+	return (NULL);
+}
+
+static const char *
+pw_trailer_get(const struct vwasm_trailer_map *tm, const char *name,
+    size_t name_len, size_t *val_len_out)
+{
+	uint32_t i;
+
+	for (i = 0; i < tm->count; i++) {
+		if (tm->entries[i].name_len == name_len &&
+		    strncasecmp(tm->entries[i].name, name, name_len) == 0) {
+			if (val_len_out != NULL)
+				*val_len_out = tm->entries[i].value_len;
+			return (tm->entries[i].value);
+		}
 	}
+	return (NULL);
+}
+
+static int
+pw_trailer_add(struct vwasm_trailer_map *tm, const char *name,
+    size_t name_len, const char *value, size_t value_len)
+{
+	struct vwasm_trailer_entry *e;
+
+	if (tm->count >= VWASM_MAX_TRAILERS)
+		return (-1);
+
+	e = &tm->entries[tm->count];
+	e->name = malloc(name_len + 1);
+	if (e->name == NULL)
+		return (-1);
+	memcpy(e->name, name, name_len);
+	e->name[name_len] = '\0';
+	e->name_len = name_len;
+
+	e->value = malloc(value_len + 1);
+	if (e->value == NULL) {
+		free(e->name);
+		e->name = NULL;
+		return (-1);
+	}
+	memcpy(e->value, value, value_len);
+	e->value[value_len] = '\0';
+	e->value_len = value_len;
+
+	tm->count++;
+	return (0);
+}
+
+static void
+pw_trailer_remove(struct vwasm_trailer_map *tm, const char *name,
+    size_t name_len)
+{
+	uint32_t i;
+
+	for (i = 0; i < tm->count; i++) {
+		if (tm->entries[i].name_len == name_len &&
+		    strncasecmp(tm->entries[i].name, name, name_len) == 0) {
+			free(tm->entries[i].name);
+			free(tm->entries[i].value);
+			if (i < tm->count - 1) {
+				tm->entries[i] = tm->entries[tm->count - 1];
+			}
+			tm->count--;
+			return;
+		}
+	}
+}
+
+static void
+pw_trailer_clear(struct vwasm_trailer_map *tm)
+{
+	uint32_t i;
+
+	for (i = 0; i < tm->count; i++) {
+		free(tm->entries[i].name);
+		free(tm->entries[i].value);
+	}
+	tm->count = 0;
 }
 
 /* ----------------------------------------------------------------
@@ -86,6 +187,7 @@ pw_proxy_get_header_map_value(void *env, wasmtime_caller_t *caller,
 	char hdr_search[260];
 	const char *val;
 	int i;
+	int32_t map_type;
 
 	(void)env;
 	(void)nargs;
@@ -94,14 +196,40 @@ pw_proxy_get_header_map_value(void *env, wasmtime_caller_t *caller,
 	AN(ctx);
 	results[0].kind = WASMTIME_I32;
 
-	hp = pw_get_header_map(ctx, args[0].of.i32);
-	if (hp == NULL) {
+	map_type = args[0].of.i32;
+
+	if (pw_read_string(ctx, (uint32_t)args[1].of.i32,
+	    (uint32_t)args[2].of.i32, key_buf, sizeof(key_buf)) != 0) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}
 
-	if (pw_read_string(ctx, (uint32_t)args[1].of.i32,
-	    (uint32_t)args[2].of.i32, key_buf, sizeof(key_buf)) != 0) {
+	/* Handle trailer maps */
+	if (pw_is_trailer_map(map_type)) {
+		struct vwasm_trailer_map *tm = pw_get_trailer_map(ctx, map_type);
+		size_t val_len;
+
+		if (tm == NULL) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
+		val = pw_trailer_get(tm, key_buf, strlen(key_buf), &val_len);
+		if (val == NULL) {
+			results[0].of.i32 = PROXY_NOT_FOUND;
+			return (NULL);
+		}
+		if (pw_return_string(ctx, val, val_len,
+		    (uint32_t)args[3].of.i32,
+		    (uint32_t)args[4].of.i32) != 0) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	hp = pw_get_header_map(ctx, map_type);
+	if (hp == NULL) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}
@@ -144,6 +272,7 @@ pw_proxy_add_header_map_value(void *env, wasmtime_caller_t *caller,
 	struct vwasm_proxy_ctx *ctx;
 	struct http *hp;
 	char key_buf[256], val_buf[4096], hdr_line[4352];
+	int32_t map_type;
 
 	(void)env;
 	(void)nargs;
@@ -152,16 +281,34 @@ pw_proxy_add_header_map_value(void *env, wasmtime_caller_t *caller,
 	AN(ctx);
 	results[0].kind = WASMTIME_I32;
 
-	hp = pw_get_header_map_mutable(ctx, args[0].of.i32);
-	if (hp == NULL) {
-		results[0].of.i32 = PROXY_BAD_ARGUMENT;
-		return (NULL);
-	}
+	map_type = args[0].of.i32;
 
 	if (pw_read_string(ctx, (uint32_t)args[1].of.i32,
 	    (uint32_t)args[2].of.i32, key_buf, sizeof(key_buf)) != 0 ||
 	    pw_read_string(ctx, (uint32_t)args[3].of.i32,
 	    (uint32_t)args[4].of.i32, val_buf, sizeof(val_buf)) != 0) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+
+	/* Handle trailer maps */
+	if (pw_is_trailer_map(map_type)) {
+		struct vwasm_trailer_map *tm = pw_get_trailer_map(ctx, map_type);
+		if (tm == NULL) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
+		if (pw_trailer_add(tm, key_buf, strlen(key_buf),
+		    val_buf, strlen(val_buf)) != 0) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	hp = pw_get_header_map_mutable(ctx, map_type);
+	if (hp == NULL) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}
@@ -186,6 +333,7 @@ pw_proxy_replace_header_map_value(void *env, wasmtime_caller_t *caller,
 	struct http *hp;
 	char key_buf[256], val_buf[4096], hdr_search[260], hdr_line[4352];
 	int i;
+	int32_t map_type;
 
 	(void)env;
 	(void)nargs;
@@ -194,16 +342,32 @@ pw_proxy_replace_header_map_value(void *env, wasmtime_caller_t *caller,
 	AN(ctx);
 	results[0].kind = WASMTIME_I32;
 
-	hp = pw_get_header_map_mutable(ctx, args[0].of.i32);
-	if (hp == NULL) {
-		results[0].of.i32 = PROXY_BAD_ARGUMENT;
-		return (NULL);
-	}
+	map_type = args[0].of.i32;
 
 	if (pw_read_string(ctx, (uint32_t)args[1].of.i32,
 	    (uint32_t)args[2].of.i32, key_buf, sizeof(key_buf)) != 0 ||
 	    pw_read_string(ctx, (uint32_t)args[3].of.i32,
 	    (uint32_t)args[4].of.i32, val_buf, sizeof(val_buf)) != 0) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+
+	/* Handle trailer maps */
+	if (pw_is_trailer_map(map_type)) {
+		struct vwasm_trailer_map *tm = pw_get_trailer_map(ctx, map_type);
+		if (tm == NULL) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
+		pw_trailer_remove(tm, key_buf, strlen(key_buf));
+		pw_trailer_add(tm, key_buf, strlen(key_buf),
+		    val_buf, strlen(val_buf));
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	hp = pw_get_header_map_mutable(ctx, map_type);
+	if (hp == NULL) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}
@@ -234,6 +398,7 @@ pw_proxy_remove_header_map_value(void *env, wasmtime_caller_t *caller,
 	struct http *hp;
 	char key_buf[256], hdr_search[260];
 	int i;
+	int32_t map_type;
 
 	(void)env;
 	(void)nargs;
@@ -242,14 +407,28 @@ pw_proxy_remove_header_map_value(void *env, wasmtime_caller_t *caller,
 	AN(ctx);
 	results[0].kind = WASMTIME_I32;
 
-	hp = pw_get_header_map_mutable(ctx, args[0].of.i32);
-	if (hp == NULL) {
+	map_type = args[0].of.i32;
+
+	if (pw_read_string(ctx, (uint32_t)args[1].of.i32,
+	    (uint32_t)args[2].of.i32, key_buf, sizeof(key_buf)) != 0) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}
 
-	if (pw_read_string(ctx, (uint32_t)args[1].of.i32,
-	    (uint32_t)args[2].of.i32, key_buf, sizeof(key_buf)) != 0) {
+	/* Handle trailer maps */
+	if (pw_is_trailer_map(map_type)) {
+		struct vwasm_trailer_map *tm = pw_get_trailer_map(ctx, map_type);
+		if (tm == NULL) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
+		pw_trailer_remove(tm, key_buf, strlen(key_buf));
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	hp = pw_get_header_map_mutable(ctx, map_type);
+	if (hp == NULL) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}
@@ -294,7 +473,72 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 	AN(ctx);
 	results[0].kind = WASMTIME_I32;
 
-	hp = pw_get_header_map(ctx, args[0].of.i32);
+	map_type = args[0].of.i32;
+
+	/* Handle trailer maps */
+	if (pw_is_trailer_map(map_type)) {
+		struct vwasm_trailer_map *tm = pw_get_trailer_map(ctx, map_type);
+		uint8_t *tbuf;
+		size_t tsize;
+		uint32_t toffset;
+
+		if (tm == NULL || tm->count == 0) {
+			if (pw_return_bytes(ctx, NULL, 0,
+			    (uint32_t)args[1].of.i32,
+			    (uint32_t)args[2].of.i32) != 0) {
+				results[0].of.i32 = PROXY_INTERNAL;
+				return (NULL);
+			}
+			results[0].of.i32 = PROXY_OK;
+			return (NULL);
+		}
+
+		/* Calculate size: 4 (count) + count*8 (key/val sizes) + data */
+		tsize = 4 + (size_t)tm->count * 8;
+		for (i = 0; i < tm->count; i++)
+			tsize += tm->entries[i].name_len + 1 +
+			    tm->entries[i].value_len + 1;
+
+		tbuf = malloc(tsize);
+		if (tbuf == NULL) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+
+		memcpy(tbuf, &tm->count, 4);
+		toffset = 4;
+		for (i = 0; i < tm->count; i++) {
+			uint32_t klen = (uint32_t)tm->entries[i].name_len;
+			uint32_t vlen = (uint32_t)tm->entries[i].value_len;
+			memcpy(tbuf + toffset, &klen, 4);
+			toffset += 4;
+			memcpy(tbuf + toffset, &vlen, 4);
+			toffset += 4;
+		}
+		for (i = 0; i < tm->count; i++) {
+			memcpy(tbuf + toffset, tm->entries[i].name,
+			    tm->entries[i].name_len);
+			toffset += (uint32_t)tm->entries[i].name_len;
+			tbuf[toffset++] = '\0';
+			memcpy(tbuf + toffset, tm->entries[i].value,
+			    tm->entries[i].value_len);
+			toffset += (uint32_t)tm->entries[i].value_len;
+			tbuf[toffset++] = '\0';
+		}
+
+		if (pw_return_bytes(ctx, tbuf, toffset,
+		    (uint32_t)args[1].of.i32,
+		    (uint32_t)args[2].of.i32) != 0) {
+			free(tbuf);
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		free(tbuf);
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	hp = pw_get_header_map(ctx, map_type);
 	if (hp == NULL) {
 		if (pw_return_bytes(ctx, NULL, 0,
 		    (uint32_t)args[1].of.i32,
@@ -306,7 +550,6 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 		return (NULL);
 	}
 
-	map_type = args[0].of.i32;
 	pseudo_keys[0] = NULL;
 	pseudo_keys[1] = NULL;
 	pseudo_keys[2] = NULL;
@@ -518,12 +761,6 @@ pw_proxy_set_header_map_pairs(void *env, wasmtime_caller_t *caller,
 	data_ptr = (uint32_t)args[1].of.i32;
 	data_size = (uint32_t)args[2].of.i32;
 
-	hp = pw_get_header_map_mutable(ctx, (int32_t)map_type);
-	if (hp == NULL) {
-		results[0].of.i32 = PROXY_BAD_ARGUMENT;
-		return (NULL);
-	}
-
 	if (data_size < 4 || !pw_validate_region(ctx, data_ptr, data_size)) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
@@ -542,6 +779,45 @@ pw_proxy_set_header_map_pairs(void *env, wasmtime_caller_t *caller,
 	}
 
 	if (data_size < 4 + num_pairs * 8) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+
+	/* Handle trailer maps */
+	if (pw_is_trailer_map((int32_t)map_type)) {
+		struct vwasm_trailer_map *tm =
+		    pw_get_trailer_map(ctx, (int32_t)map_type);
+		if (tm == NULL) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
+		pw_trailer_clear(tm);
+		offset = 4 + num_pairs * 8;
+		for (i = 0; i < num_pairs; i++) {
+			uint32_t key_size, val_size;
+			const char *key, *val;
+
+			memcpy(&key_size, data + 4 + i * 8, 4);
+			memcpy(&val_size, data + 4 + i * 8 + 4, 4);
+
+			if (offset + key_size + 1 + val_size + 1 > data_size)
+				break;
+			key = (const char *)(data + offset);
+			offset += key_size + 1;
+			val = (const char *)(data + offset);
+			offset += val_size + 1;
+
+			if (key_size > 0 && key_size < 256 &&
+			    val_size < 4096)
+				pw_trailer_add(tm, key, key_size,
+				    val, val_size);
+		}
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	hp = pw_get_header_map_mutable(ctx, (int32_t)map_type);
+	if (hp == NULL) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}
@@ -574,6 +850,50 @@ pw_proxy_set_header_map_pairs(void *env, wasmtime_caller_t *caller,
 			    (int)key_size, key, (int)val_size, val);
 			http_SetHeader(hp, hdr_line);
 		}
+	}
+
+	results[0].of.i32 = PROXY_OK;
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
+ * proxy_get_header_map_size — return number of entries in a map
+ *
+ * ABI: proxy_get_header_map_size(map_type, return_size_ptr) -> status
+ * ---------------------------------------------------------------- */
+
+wasm_trap_t *
+pw_proxy_get_header_map_size(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_proxy_ctx *ctx;
+	int32_t map_type;
+	uint32_t count = 0;
+
+	(void)env;
+	(void)nargs;
+	(void)nresults;
+	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
+	results[0].kind = WASMTIME_I32;
+
+	map_type = args[0].of.i32;
+
+	if (pw_is_trailer_map(map_type)) {
+		const struct vwasm_trailer_map *tm =
+		    pw_get_trailer_map(ctx, map_type);
+		if (tm != NULL)
+			count = tm->count;
+	} else {
+		const struct http *hp = pw_get_header_map(ctx, map_type);
+		if (hp != NULL)
+			count = (uint32_t)(hp->nhd - HTTP_HDR_FIRST);
+	}
+
+	if (pw_write_u32(ctx, (uint32_t)args[1].of.i32, count) != 0) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
 	}
 
 	results[0].of.i32 = PROXY_OK;

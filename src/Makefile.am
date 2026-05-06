@@ -18,7 +18,12 @@ libvmod_wasm_la_SOURCES = \
 	proxy_wasm_properties.c \
 	proxy_wasm_http.c \
 	proxy_wasm_shared.c \
-	proxy_wasm_shared.h
+	proxy_wasm_shared.h \
+	store_pool.c \
+	store_pool.h \
+	http_pool.c \
+	http_pool.h \
+	compat.h
 
 libvmod_wasm_la_LDFLAGS = \
 	-module \

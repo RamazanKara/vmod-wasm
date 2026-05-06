@@ -19,8 +19,6 @@ varnish v1 -vcl+backend {
         wasm.load("test", "${wasm_module}");
         # Set a 2 MiB memory limit — grow_memory tries 32 MiB
         wasm.set_memory_limit(2097152);
-        # Give plenty of fuel so we hit the memory limit, not fuel
-        wasm.set_fuel(100000000);
     }
 
     sub vcl_recv {

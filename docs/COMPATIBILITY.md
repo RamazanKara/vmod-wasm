@@ -11,11 +11,13 @@ This document tracks the implementation status of the
 | Function | Status | Notes |
 |----------|--------|-------|
 | `proxy_log` | ✅ Implemented | Maps to VSL (SLT_Debug/SLT_Error) |
+| `proxy_get_log_level` | ✅ Implemented | Returns DEBUG; Varnish controls filtering via VSL |
 
 ### Timer
 | Function | Status | Notes |
 |----------|--------|-------|
 | `proxy_get_current_time_nanoseconds` | ✅ Implemented | Uses `clock_gettime(CLOCK_REALTIME)` |
+| `proxy_set_tick_period_milliseconds` | ✅ Implemented | Background thread delivers ticks per module |
 
 ### Header Maps
 | Function | Status | Notes |
@@ -26,12 +28,14 @@ This document tracks the implementation status of the
 | `proxy_remove_header_map_value` | ✅ Implemented | Request/response headers |
 | `proxy_get_header_map_pairs` | ✅ Implemented | Includes pseudo-headers |
 | `proxy_set_header_map_pairs` | ✅ Implemented | Replaces all headers from serialized map |
+| `proxy_get_header_map_size` | ✅ Implemented | Returns entry count for any map type |
 
 ### Buffers
 | Function | Status | Notes |
 |----------|--------|-------|
 | `proxy_get_buffer_bytes` | ✅ Implemented | HTTP_REQUEST_BODY, HTTP_RESPONSE_BODY, VM_CONFIG, PLUGIN_CONFIG |
 | `proxy_set_buffer_bytes` | ✅ Implemented | HTTP_REQUEST_BODY modification |
+| `proxy_get_buffer_status` | ✅ Implemented | Returns buffer size and flags |
 
 ### HTTP Calls
 | Function | Status | Notes |
@@ -72,6 +76,25 @@ This document tracks the implementation status of the
 | `proxy_send_local_response` | ✅ Implemented | Captures body + headers |
 | `proxy_set_effective_context` | ✅ No-op | Single context per call; switching not needed |
 | `proxy_done` | ✅ No-op | Host manages lifecycle; module signal not required |
+| `proxy_continue_stream` | ✅ Implemented | Resumes paused request/response processing |
+| `proxy_close_stream` | ✅ Implemented | Terminates stream processing |
+
+### Trailers
+| Function | Status | Notes |
+|----------|--------|-------|
+| Request/response trailers | ✅ Implemented | In-memory map; accessible via header map operations with trailer map types |
+
+### WASI Support
+| Function | Status | Notes |
+|----------|--------|-------|
+| `fd_write` | ✅ Stub | No-op (returns success) |
+| `clock_time_get` | ✅ Stub | Returns 0 |
+| `random_get` | ✅ Stub | Returns success |
+| `environ_sizes_get` | ✅ Stub | Reports 0 env vars |
+| `environ_get` | ✅ Stub | No-op |
+| `args_sizes_get` | ✅ Stub | Reports 0 args |
+| `args_get` | ✅ Stub | No-op |
+| `proc_exit` | ✅ Trap | Traps instead of exiting process |
 
 ### Memory
 | Function | Status | Notes |
@@ -88,7 +111,7 @@ This document tracks the implementation status of the
 | `proxy_on_request_headers` | ✅ Called | In vcl_recv |
 | `proxy_on_response_headers` | ✅ Called | In vcl_deliver/vcl_backend_response |
 | `proxy_on_request_body` | ✅ Called | Cached body via VRT_CacheReqBody (≤1 MiB) |
-| `proxy_on_response_body` | ✅ VDP | Delivered via Varnish Delivery Processor; body buffered (up to 1 MiB) and passed to callback on stream end |
+| `proxy_on_response_body` | ✅ VDP | Streaming via VDP: each chunk passed immediately with end_of_stream flag; no buffering |
 | `proxy_on_log` | ✅ Called | In lifecycle step 7 |
 | `proxy_on_done` | ✅ Called | In lifecycle step 8 |
 | `proxy_on_http_call_response` | ✅ Called | After HTTP callout completes |
@@ -125,9 +148,9 @@ Response maps include:
 ## Limitations
 
 1. **Synchronous HTTP calls**: `proxy_http_call` blocks the request thread
-   until the upstream responds or times out (default 5s). The
-   `proxy_on_http_call_response` callback is invoked inline after the
-   response is received, matching the spec's callback pattern.
+   until the upstream responds or times out.  Timeout is configurable via
+   `wasm.set_http_timeout(ms)` (default 5s, max 30s).  The module-supplied
+   timeout takes priority if non-zero.
 
 2. **Anti-IP-rebinding**: HTTP calls reject resolved private/internal IPs
    (RFC1918, RFC5735, RFC4193, loopback) to prevent SSRF.

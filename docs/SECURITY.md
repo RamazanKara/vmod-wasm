@@ -13,7 +13,7 @@ This document describes the security boundaries and controls.
 - No shared memory between Wasm instances
 
 ### Execution Isolation
-- Fuel limits prevent infinite loops and CPU exhaustion
+- Epoch-based time limits prevent infinite loops and CPU exhaustion
 - Each request gets a fresh instance — no state leakage between requests
 - Wasm modules cannot access the filesystem, network, or system calls
 - All host interaction goes through explicitly defined host functions
@@ -27,7 +27,7 @@ This document describes the security boundaries and controls.
 ## Threat Model
 
 ### Malicious Wasm Module
-- **CPU exhaustion**: Mitigated by fuel limits
+- **CPU exhaustion**: Mitigated by epoch-based time limits
 - **Memory exhaustion**: Mitigated by memory limits
 - **SSRF via HTTP callouts**: Mitigated by upstream allowlist
 - **Amplification attacks**: Mitigated by HTTP call rate limit
@@ -43,7 +43,7 @@ This document describes the security boundaries and controls.
 
 | Control | Default | Recommendation |
 |---------|---------|---------------|
-| Fuel limit | 1,000,000 | Set per module complexity |
+| Epoch deadline | 100ms | Set per expected module latency |
 | Memory limit | 16 MiB | Keep at 16 MiB unless needed |
 | Upstream allowlist | Allow all | **Always set in production** |
 | HTTP call limit | 5 | 3-5 for most use cases |

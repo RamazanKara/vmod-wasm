@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Proxy-Wasm ABI types and host function registration.
@@ -12,6 +12,7 @@
 #define VWASM_PROXY_WASM_H
 
 #include <stdint.h>
+#include <pthread.h>
 #include <wasmtime.h>
 
 /* ----------------------------------------------------------------
@@ -81,6 +82,29 @@ typedef enum {
 struct vwasm_shared_data;
 struct vwasm_queue_store;
 struct vwasm_metric_store;
+struct vwasm_engine;
+
+/* ----------------------------------------------------------------
+ * Trailer storage — simple key-value pair list
+ *
+ * Varnish does not expose trailers natively, so we store them
+ * in a flat buffer that mirrors the Proxy-Wasm header map format.
+ * ---------------------------------------------------------------- */
+
+#define VWASM_MAX_TRAILERS	32
+#define VWASM_TRAILER_MAX_LEN	8192  /* Max total trailer data */
+
+struct vwasm_trailer_entry {
+	char		*name;
+	size_t		 name_len;
+	char		*value;
+	size_t		 value_len;
+};
+
+struct vwasm_trailer_map {
+	struct vwasm_trailer_entry entries[VWASM_MAX_TRAILERS];
+	uint32_t	count;
+};
 
 /* ----------------------------------------------------------------
  * Metric store — thread-safe counter/gauge/histogram storage
@@ -126,6 +150,7 @@ struct vwasm_http_call_response {
 
 struct vwasm_proxy_ctx {
 	const struct vrt_ctx	*vrt_ctx;
+	struct vwasm_engine	*engine;	/* Back-pointer for http pool */
 	wasmtime_context_t	*wasm_ctx;
 	wasmtime_memory_t	 memory;
 	int			 memory_valid;
@@ -190,12 +215,16 @@ struct vwasm_proxy_ctx {
 	uint32_t		 http_call_count;
 	uint32_t		 http_call_max;
 
+	/* HTTP callout timeout (milliseconds, 0 = use module-supplied) */
+	uint32_t		 http_timeout_ms;
+
 	/* Upstream allowlist (NULL = allow all, for backwards compat) */
 	const char		**allowed_upstreams;
 	uint32_t		 num_allowed_upstreams;
 
-	/* Fuel limit for refueling during callbacks */
-	uint64_t		 fuel_limit;
+	/* Trailer maps (Varnish has no native trailer support) */
+	struct vwasm_trailer_map request_trailers;
+	struct vwasm_trailer_map response_trailers;
 };
 
 /* ----------------------------------------------------------------
@@ -215,6 +244,8 @@ wasm_trap_t *pw_proxy_get_header_map_pairs(void *, wasmtime_caller_t *,
     const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
 wasm_trap_t *pw_proxy_set_header_map_pairs(void *, wasmtime_caller_t *,
     const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
+wasm_trap_t *pw_proxy_get_header_map_size(void *, wasmtime_caller_t *,
+    const wasmtime_val_t *, size_t, wasmtime_val_t *, size_t);
 
 /* proxy_wasm_properties.c */
 wasm_trap_t *pw_proxy_get_property(void *, wasmtime_caller_t *,
@@ -231,6 +262,9 @@ int vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker);
 
 /* Cleanup proxy context resources (call after lifecycle completes) */
 void vwasm_proxy_ctx_cleanup(struct vwasm_proxy_ctx *ctx);
+
+/* Cleanup a trailer map (free all entries) */
+void vwasm_trailer_map_cleanup(struct vwasm_trailer_map *tm);
 
 /* Global shared state (initialized once, shared across all calls) */
 struct vwasm_shared_data *vwasm_proxy_wasm_get_shared_data(void);

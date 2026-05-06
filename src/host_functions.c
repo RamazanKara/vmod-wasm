@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2026 Ramazan Kara
+ * Copyright (c) 2025 Ramazan Kara
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Host functions exposed to Wasm modules — provides access to
@@ -550,5 +550,244 @@ vwasm_host_define_imports(wasmtime_linker_t *linker)
 	    host_log_msg) != 0)
 		return (-1);
 
+	return (0);
+}
+
+/* ----------------------------------------------------------------
+ * WASI stubs — minimal implementations for wasm32-wasi modules.
+ *
+ * Modules compiled with wasi targets import from
+ * "wasi_snapshot_preview1". We provide no-op/minimal stubs
+ * so these modules can instantiate without error.
+ * ---------------------------------------------------------------- */
+
+static wasm_trap_t *
+wasi_fd_write(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	(void)env;
+	(void)caller;
+	(void)args;
+	(void)nargs;
+	/* Return 0 bytes written, errno=0 */
+	if (nresults > 0) {
+		results[0].kind = WASMTIME_I32;
+		results[0].of.i32 = 0; /* ESUCCESS */
+	}
+	return (NULL);
+}
+
+static wasm_trap_t *
+wasi_clock_time_get(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	(void)env;
+	(void)caller;
+	(void)args;
+	(void)nargs;
+	if (nresults > 0) {
+		results[0].kind = WASMTIME_I32;
+		results[0].of.i32 = 0;
+	}
+	return (NULL);
+}
+
+static wasm_trap_t *
+wasi_random_get(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	(void)env;
+	(void)caller;
+	(void)args;
+	(void)nargs;
+	if (nresults > 0) {
+		results[0].kind = WASMTIME_I32;
+		results[0].of.i32 = 0;
+	}
+	return (NULL);
+}
+
+static wasm_trap_t *
+wasi_environ_sizes_get(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_host_ctx *hctx;
+	wasmtime_context_t *ctx;
+
+	(void)env;
+	(void)nargs;
+	ctx = wasmtime_caller_context(caller);
+	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+
+	/* Write 0 env vars, 0 buf size */
+	if (hctx != NULL && hctx->memory_valid) {
+		hctx->wasm_ctx = ctx;
+		uint8_t *base = wasmtime_memory_data(ctx, &hctx->memory);
+		size_t msz = wasmtime_memory_data_size(ctx, &hctx->memory);
+		uint32_t p0 = (uint32_t)args[0].of.i32;
+		uint32_t p1 = (uint32_t)args[1].of.i32;
+		uint32_t zero = 0;
+		if (p0 + 4 <= msz)
+			memcpy(base + p0, &zero, 4);
+		if (p1 + 4 <= msz)
+			memcpy(base + p1, &zero, 4);
+	}
+
+	if (nresults > 0) {
+		results[0].kind = WASMTIME_I32;
+		results[0].of.i32 = 0;
+	}
+	return (NULL);
+}
+
+static wasm_trap_t *
+wasi_environ_get(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	(void)env;
+	(void)caller;
+	(void)args;
+	(void)nargs;
+	if (nresults > 0) {
+		results[0].kind = WASMTIME_I32;
+		results[0].of.i32 = 0;
+	}
+	return (NULL);
+}
+
+static wasm_trap_t *
+wasi_args_sizes_get(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_host_ctx *hctx;
+	wasmtime_context_t *ctx;
+
+	(void)env;
+	(void)nargs;
+	ctx = wasmtime_caller_context(caller);
+	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+
+	/* Write 0 args, 0 buf size */
+	if (hctx != NULL && hctx->memory_valid) {
+		hctx->wasm_ctx = ctx;
+		uint8_t *base = wasmtime_memory_data(ctx, &hctx->memory);
+		size_t msz = wasmtime_memory_data_size(ctx, &hctx->memory);
+		uint32_t p0 = (uint32_t)args[0].of.i32;
+		uint32_t p1 = (uint32_t)args[1].of.i32;
+		uint32_t zero = 0;
+		if (p0 + 4 <= msz)
+			memcpy(base + p0, &zero, 4);
+		if (p1 + 4 <= msz)
+			memcpy(base + p1, &zero, 4);
+	}
+
+	if (nresults > 0) {
+		results[0].kind = WASMTIME_I32;
+		results[0].of.i32 = 0;
+	}
+	return (NULL);
+}
+
+static wasm_trap_t *
+wasi_args_get(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	(void)env;
+	(void)caller;
+	(void)args;
+	(void)nargs;
+	if (nresults > 0) {
+		results[0].kind = WASMTIME_I32;
+		results[0].of.i32 = 0;
+	}
+	return (NULL);
+}
+
+static wasm_trap_t *
+wasi_proc_exit(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	(void)env;
+	(void)caller;
+	(void)args;
+	(void)nargs;
+	(void)nresults;
+	/* Trap instead of exiting the process */
+	return (wasmtime_trap_new("wasi proc_exit called", 21));
+}
+
+/* Helper for WASI linker registration */
+static int
+wasi_define_func(wasmtime_linker_t *linker, const char *name,
+    int nparams, int nres, wasmtime_func_callback_t callback)
+{
+	wasm_functype_t *ft;
+	wasmtime_error_t *error;
+	wasm_valtype_vec_t params, rets;
+	int i;
+
+	wasm_valtype_vec_new_uninitialized(&params, (size_t)nparams);
+	for (i = 0; i < nparams; i++)
+		params.data[i] = wasm_valtype_new(WASM_I32);
+
+	if (nres > 0) {
+		wasm_valtype_vec_new_uninitialized(&rets, (size_t)nres);
+		for (i = 0; i < nres; i++)
+			rets.data[i] = wasm_valtype_new(WASM_I32);
+	} else {
+		wasm_valtype_vec_new_empty(&rets);
+	}
+
+	ft = wasm_functype_new(&params, &rets);
+	if (ft == NULL)
+		return (-1);
+
+	error = wasmtime_linker_define_func(linker,
+	    "wasi_snapshot_preview1", 22,
+	    name, strlen(name),
+	    ft, callback, NULL, NULL);
+	wasm_functype_delete(ft);
+
+	if (error != NULL) {
+		wasmtime_error_delete(error);
+		return (-1);
+	}
+	return (0);
+}
+
+int
+vwasm_host_define_wasi(wasmtime_linker_t *linker)
+{
+	if (wasi_define_func(linker, "fd_write", 4, 1, wasi_fd_write) != 0)
+		return (-1);
+	if (wasi_define_func(linker, "clock_time_get", 3, 1,
+	    wasi_clock_time_get) != 0)
+		return (-1);
+	if (wasi_define_func(linker, "random_get", 2, 1,
+	    wasi_random_get) != 0)
+		return (-1);
+	if (wasi_define_func(linker, "environ_sizes_get", 2, 1,
+	    wasi_environ_sizes_get) != 0)
+		return (-1);
+	if (wasi_define_func(linker, "environ_get", 2, 1,
+	    wasi_environ_get) != 0)
+		return (-1);
+	if (wasi_define_func(linker, "args_sizes_get", 2, 1,
+	    wasi_args_sizes_get) != 0)
+		return (-1);
+	if (wasi_define_func(linker, "args_get", 2, 1,
+	    wasi_args_get) != 0)
+		return (-1);
+	if (wasi_define_func(linker, "proc_exit", 1, 0,
+	    wasi_proc_exit) != 0)
+		return (-1);
 	return (0);
 }
