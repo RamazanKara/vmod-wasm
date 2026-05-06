@@ -17,6 +17,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#ifdef __linux__
+#include <sys/random.h>
+#endif
 
 #include <wasm.h>
 #include <wasmtime.h>
@@ -566,15 +571,80 @@ wasi_fd_write(void *env, wasmtime_caller_t *caller,
     const wasmtime_val_t *args, size_t nargs,
     wasmtime_val_t *results, size_t nresults)
 {
+	wasmtime_context_t *ctx;
+	struct vwasm_host_ctx *hctx;
+	uint8_t *base;
+	size_t msz;
+	int32_t fd;
+	uint32_t iovs_ptr, iovs_len, nwritten_ptr;
+	uint32_t total_written = 0;
+	uint32_t i;
+
 	(void)env;
-	(void)caller;
-	(void)args;
 	(void)nargs;
-	/* Return 0 bytes written, errno=0 */
-	if (nresults > 0) {
-		results[0].kind = WASMTIME_I32;
-		results[0].of.i32 = 0; /* ESUCCESS */
+
+	ctx = wasmtime_caller_context(caller);
+	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+
+	results[0].kind = WASMTIME_I32;
+
+	if (hctx == NULL || !hctx->memory_valid) {
+		results[0].of.i32 = 8; /* __WASI_ERRNO_BADF */
+		return (NULL);
 	}
+
+	base = wasmtime_memory_data(ctx, &hctx->memory);
+	msz = wasmtime_memory_data_size(ctx, &hctx->memory);
+
+	fd = args[0].of.i32;
+	iovs_ptr = (uint32_t)args[1].of.i32;
+	iovs_len = (uint32_t)args[2].of.i32;
+	nwritten_ptr = (uint32_t)args[3].of.i32;
+
+	/* Only allow stdout(1) and stderr(2) */
+	if (fd != 1 && fd != 2) {
+		results[0].of.i32 = 8; /* __WASI_ERRNO_BADF */
+		return (NULL);
+	}
+
+	/* Validate nwritten pointer */
+	if (nwritten_ptr + 4 > (uint32_t)msz) {
+		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		return (NULL);
+	}
+
+	/* Validate iovecs array bounds */
+	if (iovs_ptr + (uint64_t)iovs_len * 8 > msz) {
+		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		return (NULL);
+	}
+
+	/* Process each iovec: struct { u32 buf_ptr; u32 buf_len; } */
+	for (i = 0; i < iovs_len; i++) {
+		uint32_t buf_offset, buf_len;
+		uint32_t iov_base = iovs_ptr + i * 8;
+
+		memcpy(&buf_offset, base + iov_base, 4);
+		memcpy(&buf_len, base + iov_base + 4, 4);
+
+		if (buf_len == 0)
+			continue;
+
+		/* Bounds check the buffer */
+		if ((uint64_t)buf_offset + buf_len > msz) {
+			results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+			return (NULL);
+		}
+
+		/* Write to stderr (visible in Varnish logs via journald) */
+		(void)fwrite(base + buf_offset, 1, buf_len, stderr);
+		total_written += buf_len;
+	}
+
+	/* Write number of bytes written */
+	memcpy(base + nwritten_ptr, &total_written, 4);
+
+	results[0].of.i32 = 0; /* __WASI_ERRNO_SUCCESS */
 	return (NULL);
 }
 
@@ -583,14 +653,65 @@ wasi_clock_time_get(void *env, wasmtime_caller_t *caller,
     const wasmtime_val_t *args, size_t nargs,
     wasmtime_val_t *results, size_t nresults)
 {
+	wasmtime_context_t *ctx;
+	struct vwasm_host_ctx *hctx;
+	uint8_t *base;
+	size_t msz;
+	int32_t clock_id;
+	uint32_t time_ptr;
+	struct timespec ts;
+	uint64_t nanos;
+	clockid_t cid;
+
 	(void)env;
-	(void)caller;
-	(void)args;
 	(void)nargs;
-	if (nresults > 0) {
-		results[0].kind = WASMTIME_I32;
-		results[0].of.i32 = 0;
+	(void)nresults;
+
+	ctx = wasmtime_caller_context(caller);
+	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+
+	results[0].kind = WASMTIME_I32;
+
+	if (hctx == NULL || !hctx->memory_valid) {
+		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		return (NULL);
 	}
+
+	base = wasmtime_memory_data(ctx, &hctx->memory);
+	msz = wasmtime_memory_data_size(ctx, &hctx->memory);
+
+	clock_id = args[0].of.i32;
+	/* args[1] is precision (ignored — we always return best precision) */
+	time_ptr = (uint32_t)args[2].of.i32;
+
+	/* Map WASI clock IDs to POSIX */
+	switch (clock_id) {
+	case 0: /* __WASI_CLOCKID_REALTIME */
+		cid = CLOCK_REALTIME;
+		break;
+	case 1: /* __WASI_CLOCKID_MONOTONIC */
+		cid = CLOCK_MONOTONIC;
+		break;
+	default:
+		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		return (NULL);
+	}
+
+	/* Validate output pointer (uint64 = 8 bytes) */
+	if (time_ptr + 8 > (uint32_t)msz) {
+		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		return (NULL);
+	}
+
+	if (clock_gettime(cid, &ts) != 0) {
+		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		return (NULL);
+	}
+
+	nanos = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+	memcpy(base + time_ptr, &nanos, 8);
+
+	results[0].of.i32 = 0; /* __WASI_ERRNO_SUCCESS */
 	return (NULL);
 }
 
@@ -599,14 +720,72 @@ wasi_random_get(void *env, wasmtime_caller_t *caller,
     const wasmtime_val_t *args, size_t nargs,
     wasmtime_val_t *results, size_t nresults)
 {
+	wasmtime_context_t *ctx;
+	struct vwasm_host_ctx *hctx;
+	uint8_t *base;
+	size_t msz;
+	uint32_t buf_ptr, buf_len;
+
 	(void)env;
-	(void)caller;
-	(void)args;
 	(void)nargs;
-	if (nresults > 0) {
-		results[0].kind = WASMTIME_I32;
-		results[0].of.i32 = 0;
+	(void)nresults;
+
+	ctx = wasmtime_caller_context(caller);
+	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
+
+	results[0].kind = WASMTIME_I32;
+
+	if (hctx == NULL || !hctx->memory_valid) {
+		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		return (NULL);
 	}
+
+	base = wasmtime_memory_data(ctx, &hctx->memory);
+	msz = wasmtime_memory_data_size(ctx, &hctx->memory);
+
+	buf_ptr = (uint32_t)args[0].of.i32;
+	buf_len = (uint32_t)args[1].of.i32;
+
+	/* Bounds check */
+	if ((uint64_t)buf_ptr + buf_len > msz) {
+		results[0].of.i32 = 28; /* __WASI_ERRNO_INVAL */
+		return (NULL);
+	}
+
+	if (buf_len > 0) {
+#if defined(__linux__)
+		/* Use getrandom(2) on Linux */
+		ssize_t ret;
+		size_t filled = 0;
+		while (filled < buf_len) {
+			ret = getrandom(base + buf_ptr + filled,
+			    buf_len - filled, 0);
+			if (ret < 0) {
+				results[0].of.i32 = 29; /* __WASI_ERRNO_IO */
+				return (NULL);
+			}
+			filled += (size_t)ret;
+		}
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+		/* Use arc4random_buf on BSD/macOS */
+		arc4random_buf(base + buf_ptr, buf_len);
+#else
+		/* Fallback: read from /dev/urandom */
+		FILE *f = fopen("/dev/urandom", "r");
+		if (f == NULL) {
+			results[0].of.i32 = 29; /* __WASI_ERRNO_IO */
+			return (NULL);
+		}
+		if (fread(base + buf_ptr, 1, buf_len, f) != buf_len) {
+			fclose(f);
+			results[0].of.i32 = 29; /* __WASI_ERRNO_IO */
+			return (NULL);
+		}
+		fclose(f);
+#endif
+	}
+
+	results[0].of.i32 = 0; /* __WASI_ERRNO_SUCCESS */
 	return (NULL);
 }
 

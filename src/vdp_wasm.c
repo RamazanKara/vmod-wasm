@@ -66,7 +66,8 @@ vdp_wasm_task_fini(VRT_CTX, void *p)
 		vwasm_proxy_ctx_cleanup(&task->proxy_ctx);
 		if (task->pooled != NULL)
 			vwasm_store_pool_release(
-			    task->engine->pools[task->pool_idx],
+			    vwasm_engine_get_pool(task->engine,
+			        task->pool_idx),
 			    task->pooled);
 		else
 			wasmtime_store_delete(task->store);
@@ -275,7 +276,8 @@ vdp_wasm_fini(struct vdp_ctx *vdc, void **priv)
 	vwasm_proxy_ctx_cleanup(&task->proxy_ctx);
 	if (task->pooled != NULL)
 		vwasm_store_pool_release(
-		    task->engine->pools[task->pool_idx], task->pooled);
+		    vwasm_engine_get_pool(task->engine, task->pool_idx),
+		    task->pooled);
 	else
 		wasmtime_store_delete(task->store);
 	task->store = NULL;  /* Signal to PRIV_TASK fini: already cleaned */
@@ -327,8 +329,9 @@ vdp_wasm_chain_task_free(VRT_CTX, void *priv)
 		if (ct->tasks[i].store != NULL) {
 			if (ct->tasks[i].pooled != NULL)
 				vwasm_store_pool_release(
-				    ct->tasks[i].engine->pools[
-				    ct->tasks[i].pool_idx],
+				    vwasm_engine_get_pool(
+				        ct->tasks[i].engine,
+				        ct->tasks[i].pool_idx),
 				    ct->tasks[i].pooled);
 			else
 				wasmtime_store_delete(ct->tasks[i].store);
@@ -345,13 +348,12 @@ const struct vmod_priv_methods vdp_wasm_chain_task_methods = {
 };
 
 static int v_matchproto_(vdp_init_f)
-vdp_wasm_chain_init(VRT_CTX, struct vdp_ctx *vdc, void **priv,
-    struct objcore *oc)
+vdp_wasm_chain_init(VRT_CTX, struct vdp_ctx *vdc, void **priv)
 {
 	struct vmod_priv *task_priv;
 	struct vdp_wasm_chain_task *ct;
 
-	(void)oc;
+	(void)vdc;
 	CHECK_OBJ_NOTNULL(ctx, VRT_CTX_MAGIC);
 
 	task_priv = VRT_priv_task_get(ctx, vdp_wasm_chain_task_id);
@@ -367,7 +369,7 @@ vdp_wasm_chain_init(VRT_CTX, struct vdp_ctx *vdc, void **priv,
 
 static int v_matchproto_(vdp_bytes_f)
 vdp_wasm_chain_bytes(struct vdp_ctx *vdc, enum vdp_action act,
-    const void *ptr, ssize_t len)
+    void **priv, const void *ptr, ssize_t len)
 {
 	struct vdp_wasm_chain_task *ct;
 	wasmtime_val_t args[3];
@@ -379,7 +381,8 @@ vdp_wasm_chain_bytes(struct vdp_ctx *vdc, enum vdp_action act,
 	const void *current_data = ptr;
 	ssize_t current_len = len;
 
-	ct = vdc->priv;
+	AN(priv);
+	ct = *priv;
 	CHECK_OBJ(ct, VDP_WASM_CHAIN_MAGIC);
 
 	if (current_data == NULL || current_len <= 0)
@@ -462,18 +465,19 @@ vdp_wasm_chain_bytes(struct vdp_ctx *vdc, enum vdp_action act,
 }
 
 static int v_matchproto_(vdp_fini_f)
-vdp_wasm_chain_fini(struct vdp_ctx *vdc, struct vdp_entry *vdpe)
+vdp_wasm_chain_fini(struct vdp_ctx *vdc, void **priv)
 {
 	struct vdp_wasm_chain_task *ct;
 	int i;
 
-	(void)vdpe;
+	(void)vdc;
 
-	ct = vdc->priv;
-	if (ct == NULL)
+	if (priv == NULL || *priv == NULL)
 		return (0);
 
+	ct = *priv;
 	CHECK_OBJ(ct, VDP_WASM_CHAIN_MAGIC);
+	*priv = NULL;
 
 	/* Call proxy_on_log, proxy_on_done, and proxy_on_delete for each task */
 	for (i = 0; i < ct->ntasks; i++) {
@@ -512,7 +516,6 @@ vdp_wasm_chain_fini(struct vdp_ctx *vdc, struct vdp_entry *vdpe)
 		}
 	}
 
-	vdc->priv = NULL;
 	return (0);
 }
 

@@ -9,9 +9,7 @@ varnishtest "vmod-wasm: pool statistics JSON output"
 server s1 {
     rxreq
     txresp -status 200 -body "OK"
-} -start
-
-server s1 -repeat 3 -start
+} -repeat 3 -start
 
 varnish v1 -vcl+backend {
     import wasm from "${vmod_wasm}";

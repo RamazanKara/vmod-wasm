@@ -1,10 +1,10 @@
 AC_PREREQ([2.69])
-AC_INIT([vmod-wasm], [1.0.0], [https://github.com/RamazanKara/vmod-wasm/issues])
+AC_INIT([vmod-wasm], [3.1.0], [https://github.com/RamazanKara/vmod-wasm/issues])
 AC_CONFIG_SRCDIR([src/vmod_wasm.vcc])
 AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_HEADERS([config.h])
 
-AM_INIT_AUTOMAKE([1.16 foreign -Wall -Werror])
+AM_INIT_AUTOMAKE([1.16 foreign subdir-objects -Wall -Werror])
 AM_SILENT_RULES([yes])
 AM_PROG_AR
 

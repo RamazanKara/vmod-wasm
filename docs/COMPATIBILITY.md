@@ -87,9 +87,9 @@ This document tracks the implementation status of the
 ### WASI Support
 | Function | Status | Notes |
 |----------|--------|-------|
-| `fd_write` | ✅ Stub | No-op (returns success) |
-| `clock_time_get` | ✅ Stub | Returns 0 |
-| `random_get` | ✅ Stub | Returns success |
+| `fd_write` | ✅ Implemented | Full iovec parsing; stdout/stderr only; output to stderr for journal visibility |
+| `clock_time_get` | ✅ Implemented | Real nanosecond precision via `clock_gettime` (REALTIME + MONOTONIC) |
+| `random_get` | ✅ Implemented | Cryptographically secure: `getrandom(2)` (Linux), `arc4random_buf` (macOS/FreeBSD) |
 | `environ_sizes_get` | ✅ Stub | Reports 0 env vars |
 | `environ_get` | ✅ Stub | No-op |
 | `args_sizes_get` | ✅ Stub | Reports 0 args |

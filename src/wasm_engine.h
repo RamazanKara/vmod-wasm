@@ -14,7 +14,11 @@
 
 struct vrt_ctx;
 struct vwasm_engine;
-struct wasm_module_entry;
+struct wasm_module_entry {
+	char			*name;
+	wasmtime_module_t	*module;
+	wasmtime_instance_pre_t	*instance_pre;
+};
 
 /* Default execution limits */
 #define VWASM_DEFAULT_MEMLIMIT	(16 * 1024 * 1024)	/* 16 MiB */
@@ -195,6 +199,10 @@ size_t vwasm_engine_get_mem_limit(struct vwasm_engine *engine);
 /* Get a module entry by name */
 struct wasm_module_entry *vwasm_engine_find_module(
     struct vwasm_engine *engine, const char *name);
+
+/* Get the store pool for a given index */
+struct vwasm_store_pool *vwasm_engine_get_pool(
+    struct vwasm_engine *engine, int idx);
 
 /* ----------------------------------------------------------------
  * Phase 1+2: Store Pool Management

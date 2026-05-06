@@ -32,12 +32,6 @@
 #define VWASM_MAX_BODY_CACHE	(1024 * 1024)  /* 1 MiB max body to cache */
 #define VWASM_BODY_STACK_MAX	(64 * 1024)    /* 64 KiB stack buffer for bodies */
 
-struct wasm_module_entry {
-	char			*name;
-	wasmtime_module_t	*module;
-	wasmtime_instance_pre_t	*instance_pre;
-};
-
 /* Per-module tick timer state */
 struct vwasm_tick_timer {
 	pthread_t		thread;
@@ -1356,6 +1350,14 @@ vwasm_engine_find_module(struct vwasm_engine *engine, const char *name)
 	if (engine == NULL || name == NULL)
 		return (NULL);
 	return (find_module(engine, name));
+}
+
+struct vwasm_store_pool *
+vwasm_engine_get_pool(struct vwasm_engine *engine, int idx)
+{
+	if (engine == NULL || idx < 0 || idx >= engine->nmodules)
+		return (NULL);
+	return (engine->pools[idx]);
 }
 
 /*

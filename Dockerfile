@@ -49,6 +49,16 @@ RUN cd examples/rust && cargo build --release \
 RUN cd examples/proxy-wasm-filter && cargo build --release \
     && cp target/wasm32-unknown-unknown/release/proxy_wasm_filter.wasm /src/tests/wasm/
 
+# Build passthrough filter module (for filter chain tests)
+RUN cd examples/passthrough \
+    && cargo build --target wasm32-unknown-unknown --release \
+    && cp target/wasm32-unknown-unknown/release/passthrough.wasm /src/tests/wasm/
+
+# Build transform filter module (for filter chain tests)
+RUN cd examples/transform \
+    && cargo build --target wasm32-unknown-unknown --release \
+    && cp target/wasm32-unknown-unknown/release/transform.wasm /src/tests/wasm/
+
 # Build the VMOD
 RUN chmod +x autogen.sh \
     && ./autogen.sh \

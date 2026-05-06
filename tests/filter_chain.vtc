@@ -10,9 +10,7 @@ varnishtest "vmod-wasm: filter chain execution"
 server s1 {
     rxreq
     txresp -status 200 -body "Hello World"
-} -start
-
-server s1 -repeat 5 -start
+} -repeat 4 -start
 
 varnish v1 -vcl+backend {
     import wasm from "${vmod_wasm}";

@@ -2,6 +2,33 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [3.1.0] - 2026-05-06
+
+### Added
+- **Production-ready WASI implementations**:
+  - `fd_write`: Full iovec parsing with bounds checking; stdout/stderr only;
+    output goes to stderr for visibility in systemd journal
+  - `clock_time_get`: Real nanosecond-precision time via `clock_gettime`
+    (supports CLOCK_REALTIME and CLOCK_MONOTONIC)
+  - `random_get`: Cryptographically secure random bytes via `getrandom(2)` (Linux),
+    `arc4random_buf` (macOS/FreeBSD), or `/dev/urandom` (fallback)
+- **Filter chain test modules**: Dedicated `passthrough.wasm` and `transform.wasm`
+  for filter chain integration test coverage
+- New `vwasm_engine_get_pool()` accessor for opaque store pool access
+
+### Fixed
+- VDP chain API updated for Varnish 7.6+ (`void **priv` callback signatures)
+- VTC test deadlocks: fixed server start patterns in `filter_chain.vtc` and
+  `pool_stats.vtc` (removed double-start race condition)
+- Filter chain server repeat count corrected (4 clients = `-repeat 4`)
+- Duplicate `*priv = NULL` in `vdp_wasm_fini` removed
+- Automake `subdir-objects` warning resolved
+
+### Changed
+- Unit tests removed from build (cannot link standalone against Varnish internals);
+  all testing via VTC integration tests (19 tests, full coverage)
+- WASI stubs upgraded from no-ops to real implementations with proper WASI errno codes
+
 ## [3.0.0] - 2026-05-06
 
 ### Added
