@@ -44,7 +44,7 @@ jobs:
           # Extract compiled VMOD (.so)
           docker run --rm --platform linux/${{ matrix.arch }} \
             vmod-wasm-release-${{ matrix.arch }} sh -c \
-            'cat /src/.libs/libvmod_wasm.so' \
+            'cat /src/src/.libs/libvmod_wasm.so' \
             > "dist/libvmod_wasm-${{ steps.version.outputs.version }}-varnish9-linux-${{ matrix.arch }}.so"
           # Extract .wasm modules (architecture-independent, only needed once)
           if [ "${{ matrix.arch }}" = "amd64" ]; then
