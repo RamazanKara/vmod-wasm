@@ -1,15 +1,13 @@
-/// Transform filter module — demonstrates response header manipulation
-/// using the raw Proxy-Wasm ABI host functions.
-///
-/// This module adds an `X-Transform: applied` response header to every
-/// response that passes through it, demonstrating direct host-function
-/// interaction without the proxy-wasm SDK.
+//! Transform filter module — demonstrates response header manipulation
+//! using the raw Proxy-Wasm ABI host functions.
+//!
+//! This module adds an `X-Transform: applied` response header to every
+//! response that passes through it, demonstrating direct host-function
+//! interaction without the proxy-wasm SDK.
 
 // Import the host function for setting header map values.
 // map_type 3 = ResponseHeaders in the Proxy-Wasm ABI.
 extern "C" {
-    fn proxy_set_header_map_pairs(map_type: i32, data_ptr: i32, data_size: i32) -> i32;
-    fn proxy_get_header_map_pairs(map_type: i32, data_ptr: i32, data_size: i32) -> i32;
     fn proxy_add_header_map_value(
         map_type: i32,
         key_ptr: i32,

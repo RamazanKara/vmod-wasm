@@ -1,5 +1,5 @@
-/// Passthrough filter module for testing.
-/// All callbacks return 0 (Action::Continue) — no modification to request/response.
+//! Passthrough filter module for testing.
+//! All callbacks return 0 (Action::Continue) — no modification to request/response.
 
 #[no_mangle]
 pub extern "C" fn proxy_on_memory_allocate(size: i32) -> i32 {

@@ -74,7 +74,11 @@ pub extern "C" fn echo_user_agent() -> i32 {
     };
 
     if len > 0 {
-        let actual_len = if len < buf.len() as i32 { len } else { buf.len() as i32 };
+        let actual_len = if len < buf.len() as i32 {
+            len
+        } else {
+            buf.len() as i32
+        };
         let resp_name = b"X-Wasm-UA";
         unsafe {
             set_response_header(
@@ -97,7 +101,11 @@ pub extern "C" fn echo_url() -> i32 {
     let len = unsafe { get_request_url(buf.as_mut_ptr(), buf.len() as i32) };
 
     if len > 0 {
-        let actual_len = if len < buf.len() as i32 { len } else { buf.len() as i32 };
+        let actual_len = if len < buf.len() as i32 {
+            len
+        } else {
+            buf.len() as i32
+        };
         let resp_name = b"X-Wasm-URL";
         unsafe {
             set_response_header(
@@ -120,7 +128,11 @@ pub extern "C" fn echo_method() -> i32 {
     let len = unsafe { get_request_method(buf.as_mut_ptr(), buf.len() as i32) };
 
     if len > 0 {
-        let actual_len = if len < buf.len() as i32 { len } else { buf.len() as i32 };
+        let actual_len = if len < buf.len() as i32 {
+            len
+        } else {
+            buf.len() as i32
+        };
         let resp_name = b"X-Wasm-Method";
         unsafe {
             set_response_header(
@@ -143,7 +155,11 @@ pub extern "C" fn echo_client_ip() -> i32 {
     let len = unsafe { get_client_ip(buf.as_mut_ptr(), buf.len() as i32) };
 
     if len > 0 {
-        let actual_len = if len < buf.len() as i32 { len } else { buf.len() as i32 };
+        let actual_len = if len < buf.len() as i32 {
+            len
+        } else {
+            buf.len() as i32
+        };
         let resp_name = b"X-Wasm-ClientIP";
         unsafe {
             set_response_header(
@@ -188,7 +204,11 @@ pub extern "C" fn block_bad_bot() -> i32 {
         return 0; // No User-Agent, allow
     }
 
-    let actual_len = if len < buf.len() as i32 { len as usize } else { buf.len() };
+    let actual_len = if len < buf.len() as i32 {
+        len as usize
+    } else {
+        buf.len()
+    };
 
     // Simple substring search for "BadBot"
     let ua = &buf[..actual_len];
@@ -344,7 +364,11 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// - Otherwise, adds X-Wasm-Filter: proxy-wasm header
 /// - Returns 0 (CONTINUE)
 #[no_mangle]
-pub extern "C" fn proxy_on_request_headers(_context_id: i32, _num_headers: i32, _end_of_stream: i32) -> i32 {
+pub extern "C" fn proxy_on_request_headers(
+    _context_id: i32,
+    _num_headers: i32,
+    _end_of_stream: i32,
+) -> i32 {
     // Log that we're processing
     let msg = b"proxy-wasm filter: processing request";
     unsafe {
@@ -368,9 +392,8 @@ pub extern "C" fn proxy_on_request_headers(_context_id: i32, _num_headers: i32, 
 
     if status == 0 && return_size > 0 {
         // Check if User-Agent contains "BadBot"
-        let ua_slice = unsafe {
-            core::slice::from_raw_parts(return_data as *const u8, return_size as usize)
-        };
+        let ua_slice =
+            unsafe { core::slice::from_raw_parts(return_data as *const u8, return_size as usize) };
 
         if contains(ua_slice, b"BadBot") {
             // Block with 403
@@ -383,8 +406,9 @@ pub extern "C" fn proxy_on_request_headers(_context_id: i32, _num_headers: i32, 
                     details.len() as i32,
                     body.as_ptr() as i32,
                     body.len() as i32,
-                    0, 0, // no extra headers
-                    -1,   // no grpc status
+                    0,
+                    0,  // no extra headers
+                    -1, // no grpc status
                 );
             }
             return 0; // CONTINUE — the host checks local_response_set
@@ -411,7 +435,11 @@ pub extern "C" fn proxy_on_request_headers(_context_id: i32, _num_headers: i32, 
 ///
 /// Returns 0 (CONTINUE).
 #[no_mangle]
-pub extern "C" fn proxy_on_response_headers(_context_id: i32, _num_headers: i32, _end_of_stream: i32) -> i32 {
+pub extern "C" fn proxy_on_response_headers(
+    _context_id: i32,
+    _num_headers: i32,
+    _end_of_stream: i32,
+) -> i32 {
     // Log that we're processing response
     let msg = b"proxy-wasm filter: processing response";
     unsafe {

@@ -99,7 +99,6 @@ impl RootContext for EdgeSecurityRoot {
         true
     }
 
-
     fn get_type(&self) -> Option<ContextType> {
         Some(ContextType::HttpContext)
     }
@@ -164,10 +163,7 @@ impl Context for EdgeSecurityFilter {
 
         proxy_wasm::hostcalls::log(
             LogLevel::Info,
-            &format!(
-                "edge-security-filter: auth OK (body_size={})",
-                body_size
-            ),
+            &format!("edge-security-filter: auth OK (body_size={})", body_size),
         )
         .ok();
     }
@@ -225,10 +221,7 @@ impl HttpContext for EdgeSecurityFilter {
                 {
                     proxy_wasm::hostcalls::log(
                         LogLevel::Warn,
-                        &format!(
-                            "edge-security-filter: blocked country={}",
-                            country_upper
-                        ),
+                        &format!("edge-security-filter: blocked country={}", country_upper),
                     )
                     .ok();
 
@@ -390,7 +383,7 @@ fn increment_shared_counter(key: &str) {
         match proxy_wasm::hostcalls::set_shared_data(key, Some(&new_bytes), cas) {
             Ok(()) => break,
             Err(Status::CasMismatch) => continue, // Retry on CAS conflict
-            Err(_) => break,                       // Give up on other errors
+            Err(_) => break,                      // Give up on other errors
         }
     }
 }
@@ -398,8 +391,8 @@ fn increment_shared_counter(key: &str) {
 /// Check if a client IP is rate-limited. Returns true if over the limit.
 fn is_rate_limited(client_ip: &str, max_requests: u32, window_seconds: u32) -> bool {
     // Use time-bucketed key: "rl:{ip}:{window_bucket}"
-    let now = proxy_wasm::hostcalls::get_current_time()
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let now =
+        proxy_wasm::hostcalls::get_current_time().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
     let epoch_secs = now
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .unwrap_or_default()

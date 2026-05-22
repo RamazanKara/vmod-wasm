@@ -72,7 +72,8 @@ impl HttpContext for FilterHttp {
         proxy_wasm::hostcalls::log(
             LogLevel::Info,
             &format!("sdk-filter: response body size={}", body_size),
-        ).ok();
+        )
+        .ok();
         Action::Continue
     }
 }
