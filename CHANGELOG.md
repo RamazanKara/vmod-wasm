@@ -2,6 +2,27 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [4.1.0] - 2026-05-22
+
+### Added
+- **`proxy_http_call` deferred callback**: `proxy_on_http_call_response` is now
+  invoked after `on_http_request_headers` returns, avoiding the proxy-wasm SDK
+  `RefCell` re-entrancy panic that occurred when the callback was called inline
+- **Auth callout in edge-security-filter example**: dispatches an HTTP call to a
+  configurable `auth_service` when an `Authorization` header is present; sends
+  `401 Unauthorized` if the auth service returns a non-200 status
+- **New VTC test** `proxy_wasm_edge_filter_callout.vtc`: covers valid auth
+  (pass-through), invalid auth (401 synth), and no `Authorization` header
+  (pass-through without callout)
+
+### Fixed
+- Reset `action` from `PAUSE` to `CONTINUE` after a successful callout so the
+  request proceeds normally when the auth service approves
+- Propagate `local_response_code` (e.g. 401) back to VCL via the `status_code`
+  output parameter of `proxy_wasm_on_request_configured`
+- Restore `local_response_set` check on the non-callout path (bot/geo blocking)
+  that was accidentally removed during the deferred-callback refactor
+
 ## [3.1.0] - 2026-05-06
 
 ### Added
