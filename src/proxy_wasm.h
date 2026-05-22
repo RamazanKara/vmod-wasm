@@ -154,18 +154,12 @@ struct vwasm_http_call_entry {
 
 VRBT_HEAD(vwasm_http_call_tree, vwasm_http_call_entry);
 
-static inline int
+int
 vwasm_http_call_cmp(const struct vwasm_http_call_entry *a,
     const struct vwasm_http_call_entry *b)
-{
-	if (a->token_id < b->token_id)
-		return (-1);
-	if (a->token_id > b->token_id)
-		return (1);
-	return (0);
-}
+;
 
-VRBT_GENERATE_STATIC(vwasm_http_call_tree, vwasm_http_call_entry, entry,
+VRBT_PROTOTYPE(vwasm_http_call_tree, vwasm_http_call_entry, entry,
     vwasm_http_call_cmp)
 
 /* ----------------------------------------------------------------

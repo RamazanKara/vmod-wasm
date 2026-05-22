@@ -34,6 +34,20 @@
 #include "wasm_engine.h"
 #include "http_pool.h"
 
+int
+vwasm_http_call_cmp(const struct vwasm_http_call_entry *a,
+    const struct vwasm_http_call_entry *b)
+{
+	if (a->token_id < b->token_id)
+		return (-1);
+	if (a->token_id > b->token_id)
+		return (1);
+	return (0);
+}
+
+VRBT_GENERATE(vwasm_http_call_tree, vwasm_http_call_entry, entry,
+    vwasm_http_call_cmp)
+
 #define PW_HTTP_MAX_RESPONSE	(256 * 1024)  /* 256 KiB max response */
 
 /* ----------------------------------------------------------------
