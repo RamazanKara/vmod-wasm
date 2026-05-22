@@ -175,8 +175,9 @@ pw_trailer_clear(struct vwasm_trailer_map *tm)
 /* ----------------------------------------------------------------
  * HTTP call response header helpers
  *
- * Parse raw HTTP response stored in ctx->http_response to extract
- * headers.  The raw format is: "HTTP/1.1 200 OK\r\n<headers>\r\n\r\n<body>"
+ * Parse raw HTTP response stored in ctx->active_http_call->response
+ * to extract headers.  The raw format is:
+ * "HTTP/1.1 200 OK\r\n<headers>\r\n\r\n<body>"
  * ---------------------------------------------------------------- */
 
 /*
@@ -192,11 +193,13 @@ pw_http_call_response_find_header(const struct vwasm_proxy_ctx *ctx,
 	const char *raw, *end, *p, *line_end;
 	size_t key_len;
 
-	if (!ctx->http_response.valid || ctx->http_response.raw_buf == NULL)
+	if (ctx->active_http_call == NULL ||
+	    !ctx->active_http_call->response.valid ||
+	    ctx->active_http_call->response.raw_buf == NULL)
 		return (NULL);
 
-	raw = (const char *)ctx->http_response.raw_buf;
-	end = raw + ctx->http_response.raw_len;
+	raw = (const char *)ctx->active_http_call->response.raw_buf;
+	end = raw + ctx->active_http_call->response.raw_len;
 
 	/* Find end of status line */
 	p = raw;
@@ -638,8 +641,9 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 		uint32_t hcount, hoffset;
 		struct { const char *k; size_t kl; const char *v; size_t vl; } hdrs[64];
 
-		if (!ctx->http_response.valid ||
-		    ctx->http_response.raw_buf == NULL) {
+		if (ctx->active_http_call == NULL ||
+		    !ctx->active_http_call->response.valid ||
+		    ctx->active_http_call->response.raw_buf == NULL) {
 			if (pw_return_bytes(ctx, NULL, 0,
 			    (uint32_t)args[1].of.i32,
 			    (uint32_t)args[2].of.i32) != 0) {
@@ -650,8 +654,8 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 			return (NULL);
 		}
 
-		raw = (const char *)ctx->http_response.raw_buf;
-		raw_end = raw + ctx->http_response.raw_len;
+		raw = (const char *)ctx->active_http_call->response.raw_buf;
+		raw_end = raw + ctx->active_http_call->response.raw_len;
 		hcount = 0;
 
 		/* Parse status line → :status pseudo-header */

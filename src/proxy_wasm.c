@@ -433,9 +433,10 @@ pw_proxy_get_buffer_bytes(void *env, wasmtime_caller_t *caller,
 		data_len = ctx->plugin_config_len;
 		break;
 	case PROXY_BUFFER_HTTP_CALL_BODY:
-		if (ctx->http_response.valid) {
-			data = (const char *)ctx->http_response.body;
-			data_len = ctx->http_response.body_len;
+		if (ctx->active_http_call != NULL &&
+		    ctx->active_http_call->response.valid) {
+			data = (const char *)ctx->active_http_call->response.body;
+			data_len = ctx->active_http_call->response.body_len;
 		}
 		break;
 	case PROXY_BUFFER_HTTP_REQUEST_BODY:
@@ -568,8 +569,9 @@ pw_proxy_get_buffer_status(void *env, wasmtime_caller_t *caller,
 		data_len = ctx->plugin_config_len;
 		break;
 	case PROXY_BUFFER_HTTP_CALL_BODY:
-		if (ctx->http_response.valid)
-			data_len = ctx->http_response.body_len;
+		if (ctx->active_http_call != NULL &&
+		    ctx->active_http_call->response.valid)
+			data_len = ctx->active_http_call->response.body_len;
 		break;
 	case PROXY_BUFFER_HTTP_REQUEST_BODY:
 		if (ctx->body_modified && ctx->modified_body != NULL)
@@ -1192,12 +1194,16 @@ vwasm_proxy_ctx_cleanup(struct vwasm_proxy_ctx *ctx)
 	if (ctx == NULL)
 		return;
 
-	/* Free HTTP call response buffer */
-	if (ctx->http_response.raw_buf != NULL) {
-		free(ctx->http_response.raw_buf);
-		ctx->http_response.raw_buf = NULL;
-		ctx->http_response.body = NULL;
-		ctx->http_response.valid = 0;
+	/* Free all HTTP call response entries */
+	{
+		struct vwasm_http_call_entry *ent, *tent;
+		VRBT_FOREACH_SAFE(ent, vwasm_http_call_tree,
+		    &ctx->http_calls, tent) {
+			vwasm_http_call_tree_VRBT_REMOVE(&ctx->http_calls,
+			    ent);
+			free(ent->response.raw_buf);
+			free(ent);
+		}
 	}
 
 	/* Free cached request body (only if heap-allocated) */

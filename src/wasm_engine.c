@@ -1127,61 +1127,76 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	}
 
 	/*
-	 * Deferred HTTP call callback: if proxy_http_call stored a
-	 * response during the header function, invoke the callback now
-	 * that the header function has returned (avoids RefCell panic
+	 * Deferred HTTP call callbacks: if proxy_http_call stored one or
+	 * more responses during the header function, invoke the callbacks
+	 * now that the header function has returned (avoids RefCell panic
 	 * in the proxy-wasm Rust SDK from re-entrant borrows).
+	 *
+	 * Iterate the VRBT in insertion order (ascending token_id).
 	 */
-	if (proxy_ctx.http_call_pending) {
+	if (!VRBT_EMPTY(&proxy_ctx.http_calls)) {
 		wasmtime_extern_t cb_item;
-		proxy_ctx.http_call_pending = 0;
+		struct vwasm_http_call_entry *ent, *tent;
 
 		if (wasmtime_instance_export_get(context, &instance,
 		    "proxy_on_http_call_response", 27, &cb_item) &&
 		    cb_item.kind == WASMTIME_EXTERN_FUNC) {
-			wasmtime_val_t cb_args[5];
-			wasmtime_error_t *cb_err;
-			wasm_trap_t *cb_trap = NULL;
 
-			wasmtime_context_set_epoch_deadline(context,
-			    VWASM_DEFAULT_EPOCH_DEADLINE_MS);
+			VRBT_FOREACH_SAFE(ent, vwasm_http_call_tree,
+			    &proxy_ctx.http_calls, tent) {
+				wasmtime_val_t cb_args[5];
+				wasmtime_error_t *cb_err;
+				wasm_trap_t *cb_trap = NULL;
 
-			cb_args[0].kind = WASMTIME_I32;
-			cb_args[0].of.i32 =
-			    (int32_t)proxy_ctx.stream_context_id;
-			cb_args[1].kind = WASMTIME_I32;
-			cb_args[1].of.i32 =
-			    (int32_t)proxy_ctx.http_call_token_id;
-			cb_args[2].kind = WASMTIME_I32;
-			cb_args[2].of.i32 =
-			    (int32_t)proxy_ctx.http_call_num_headers;
-			cb_args[3].kind = WASMTIME_I32;
-			cb_args[3].of.i32 =
-			    (int32_t)proxy_ctx.http_call_body_len;
-			cb_args[4].kind = WASMTIME_I32;
-			cb_args[4].of.i32 = 0; /* num_trailers */
+				wasmtime_context_set_epoch_deadline(context,
+				    VWASM_DEFAULT_EPOCH_DEADLINE_MS);
 
-			cb_err = wasmtime_func_call(context,
-			    &cb_item.of.func, cb_args, 5,
-			    NULL, 0, &cb_trap);
-			if (cb_err != NULL)
-				wasmtime_error_delete(cb_err);
-			if (cb_trap != NULL)
-				wasm_trap_delete(cb_trap);
+				/* Set active call so header maps can look up
+				 * the correct response */
+				proxy_ctx.active_http_call = ent;
 
-			/*
-			 * After successful callback, reset action to
-			 * CONTINUE so the request proceeds (the original
-			 * PAUSE was only to wait for the HTTP call).
-			 * If the callback sent a local response, return
-			 * the status code immediately.
-			 */
-			if (proxy_ctx.local_response_set) {
-				*status_code =
-				    proxy_ctx.local_response_code;
-				ret = 0;
-				goto cleanup;
+				cb_args[0].kind = WASMTIME_I32;
+				cb_args[0].of.i32 =
+				    (int32_t)proxy_ctx.stream_context_id;
+				cb_args[1].kind = WASMTIME_I32;
+				cb_args[1].of.i32 =
+				    (int32_t)ent->token_id;
+				cb_args[2].kind = WASMTIME_I32;
+				cb_args[2].of.i32 =
+				    (int32_t)ent->response.num_headers;
+				cb_args[3].kind = WASMTIME_I32;
+				cb_args[3].of.i32 =
+				    (int32_t)ent->response.body_len;
+				cb_args[4].kind = WASMTIME_I32;
+				cb_args[4].of.i32 = 0; /* num_trailers */
+
+				cb_err = wasmtime_func_call(context,
+				    &cb_item.of.func, cb_args, 5,
+				    NULL, 0, &cb_trap);
+				if (cb_err != NULL)
+					wasmtime_error_delete(cb_err);
+				if (cb_trap != NULL)
+					wasm_trap_delete(cb_trap);
+
+				proxy_ctx.active_http_call = NULL;
+
+				/*
+				 * If the callback sent a local response,
+				 * stop iterating and return immediately.
+				 */
+				if (proxy_ctx.local_response_set) {
+					*status_code =
+					    proxy_ctx.local_response_code;
+					ret = 0;
+					goto cleanup;
+				}
 			}
+			/*
+			 * All callbacks succeeded without sending a local
+			 * response — reset action to CONTINUE so the
+			 * request proceeds (the original PAUSE was only to
+			 * wait for the HTTP call(s)).
+			 */
 			action = 0;
 		}
 	}

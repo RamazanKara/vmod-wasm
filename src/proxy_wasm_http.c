@@ -231,7 +231,6 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	uint8_t *response_buf = NULL;
 	size_t response_len = 0;
 	ssize_t n;
-	uint32_t token_id = 1;
 	const char *method;
 	const char *path;
 	char extra_headers[4096];
@@ -577,36 +576,40 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 		}
 	}
 
-	/* Store response in context for get_buffer_bytes(HTTP_CALL_BODY) */
-	ctx->http_response.raw_buf = response_buf;
-	ctx->http_response.raw_len = response_len;
-	ctx->http_response.body = body_start;
-	ctx->http_response.body_len = resp_body_len;
-	ctx->http_response.num_headers = resp_num_headers;
-	ctx->http_response.valid = 1;
+	/* Store response in VRBT tree keyed by token_id */
+	{
+		struct vwasm_http_call_entry *ent;
+		uint32_t token_id;
 
-	/* Write token ID */
-	if (pw_write_u32(ctx, (uint32_t)args[9].of.i32, token_id) != 0) {
-		free(response_buf);
-		ctx->http_response.raw_buf = NULL;
-		ctx->http_response.valid = 0;
-		results[0].of.i32 = PROXY_INTERNAL;
-		return (NULL);
+		token_id = ++ctx->http_call_next_token;
+
+		ent = calloc(1, sizeof(*ent));
+		if (ent == NULL) {
+			free(response_buf);
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		ent->token_id = token_id;
+		ent->response.raw_buf = response_buf;
+		ent->response.raw_len = response_len;
+		ent->response.body = body_start;
+		ent->response.body_len = resp_body_len;
+		ent->response.num_headers = resp_num_headers;
+		ent->response.valid = 1;
+
+		vwasm_http_call_tree_VRBT_INSERT(&ctx->http_calls, ent);
+
+		/* Write token ID back to the module */
+		if (pw_write_u32(ctx, (uint32_t)args[9].of.i32,
+		    token_id) != 0) {
+			vwasm_http_call_tree_VRBT_REMOVE(&ctx->http_calls,
+			    ent);
+			free(response_buf);
+			free(ent);
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
 	}
-
-	/*
-	 * Defer proxy_on_http_call_response to after the current host
-	 * function returns.  The proxy-wasm SDK uses RefCell internally
-	 * and panics on re-entrant borrow if we call the callback from
-	 * within the same execution of proxy_on_http_request_headers.
-	 *
-	 * The engine (wasm_engine.c) checks http_call_pending after the
-	 * header function returns and invokes the callback then.
-	 */
-	ctx->http_call_pending = 1;
-	ctx->http_call_token_id = token_id;
-	ctx->http_call_num_headers = resp_num_headers;
-	ctx->http_call_body_len = resp_body_len;
 
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);

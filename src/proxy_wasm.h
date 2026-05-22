@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <wasmtime.h>
+#include "vtree.h"
 
 /* ----------------------------------------------------------------
  * Proxy-Wasm ABI enums
@@ -144,6 +145,29 @@ struct vwasm_http_call_response {
 	int		 valid;
 };
 
+/* Red-black tree entry for multiple outstanding HTTP callouts */
+struct vwasm_http_call_entry {
+	VRBT_ENTRY(vwasm_http_call_entry) entry;
+	uint32_t			 token_id;
+	struct vwasm_http_call_response	 response;
+};
+
+VRBT_HEAD(vwasm_http_call_tree, vwasm_http_call_entry);
+
+static inline int
+vwasm_http_call_cmp(const struct vwasm_http_call_entry *a,
+    const struct vwasm_http_call_entry *b)
+{
+	if (a->token_id < b->token_id)
+		return (-1);
+	if (a->token_id > b->token_id)
+		return (1);
+	return (0);
+}
+
+VRBT_GENERATE_STATIC(vwasm_http_call_tree, vwasm_http_call_entry, entry,
+    vwasm_http_call_cmp)
+
 /* ----------------------------------------------------------------
  * Proxy-Wasm execution context
  *
@@ -199,14 +223,12 @@ struct vwasm_proxy_ctx {
 	/* Metric store (global, not per-ctx) */
 	struct vwasm_metric_store *metric_store;
 
-	/* HTTP call response (for proxy_on_http_call_response) */
-	struct vwasm_http_call_response http_response;
+	/* HTTP call responses (VRBT keyed by token_id) */
+	struct vwasm_http_call_tree http_calls;
+	uint32_t		 http_call_next_token;
 
-	/* Deferred HTTP call callback (invoked after header fn returns) */
-	int			 http_call_pending;
-	uint32_t		 http_call_token_id;
-	uint32_t		 http_call_num_headers;
-	size_t			 http_call_body_len;
+	/* Active call context (set during proxy_on_http_call_response) */
+	struct vwasm_http_call_entry *active_http_call;
 
 	/* HTTP request/response body access */
 	const uint8_t		*request_body;
