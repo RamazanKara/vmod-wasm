@@ -2,6 +2,16 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [4.2.1] - 2026-05-23
+
+### Changed
+- Removed dead C unit test files (693 lines) not wired into build
+- Deduplicated README: consolidated docs links, removed inline code examples (199 → 137 lines)
+
+### Added
+- Multi-arch release builds: pre-compiled `.so` for linux/amd64 and linux/arm64
+- All example `.wasm` modules attached as portable release assets
+
 ## [4.2.0] - 2026-05-22
 
 ### Added
