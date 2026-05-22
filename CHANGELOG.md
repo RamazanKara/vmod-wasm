@@ -2,6 +2,24 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [4.2.0] - 2026-05-22
+
+### Added
+- **Multi-call HTTP response storage**: Replaced single HTTP call response state
+  with a Varnish VRBT (red-black tree) keyed by Proxy-Wasm `token_id`, enabling
+  modules to dispatch multiple `proxy_http_call` requests per stream.
+
+### Changed
+- **Deferred callback delivery** now iterates all pending call responses and
+  invokes `proxy_on_http_call_response` for each token in order.
+- **Header and buffer access for HTTP call responses** now use the active call
+  entry context (`active_http_call`) instead of a single global response slot.
+
+### Fixed
+- Removed response overwrite behavior when multiple callouts were dispatched in
+  a single request lifecycle.
+- Cleanup now frees all stored call response entries safely via VRBT traversal.
+
 ## [4.1.0] - 2026-05-22
 
 ### Added
