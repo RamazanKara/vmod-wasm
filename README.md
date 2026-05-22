@@ -178,35 +178,8 @@ docker run --rm vmod-wasm-dev make check
 
 ## Architecture
 
-```
-                         ┌────────────────┐
-                         │   VCL Config   │
-                         └───────┬────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │      vmod_wasm.c        │
-                    │  (VCL function layer)   │
-                    └────────────┬────────────┘
-                                 │
-            ┌────────────────────┼───────────────────┐
-            │                    │                   │
-  ┌─────────▼──────┐  ┌─────────▼────────┐  ┌──────▼────────┐
-  │ wasm_engine.c  │  │ proxy_wasm.c     │  │ host_funcs.c  │
-  │ (Wasmtime)     │  │ (ABI lifecycle)  │  │ (env + WASI)  │
-  └─────────┬──────┘  └─────────┬────────┘  └───────────────┘
-            │                    │
-  ┌─────────▼──────┐  ┌─────────▼────────┐
-  │ store_pool.c   │  │ proxy_wasm_      │
-  │ (instance pool)│  │ http/shared/     │
-  └────────────────┘  │ headers/metrics  │
-                       └─────────┬────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │      http_pool.c       │
-                    │  (connection pool +    │
-                    │   circuit breaker)     │
-                    └────────────────────────┘
-```
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the up-to-date component
+diagram and request lifecycle.
 
 ## Documentation
 
