@@ -1,0 +1,90 @@
+varnishtest "edge-security-filter: auth callout via dispatch_http_call"
+
+# Auth service mock - always returns 200 (valid token)
+server s2 -repeat 2 {
+    rxreq
+    expect req.method == "POST"
+    expect req.url == "/validate"
+    txresp -status 200 -body "OK"
+} -start
+
+# Auth service mock - always returns 403 (invalid token)
+server s3 {
+    rxreq
+    expect req.method == "POST"
+    expect req.url == "/validate"
+    txresp -status 403 -body "Forbidden"
+} -start
+
+# Backend server
+server s1 -repeat 3 {
+    rxreq
+    txresp -status 200 -body "Backend OK"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl {
+    import wasm from "${vmod_wasm}";
+
+    backend be1 {
+        .host = "${s1_addr}";
+        .port = "${s1_port}";
+    }
+
+    sub vcl_init {
+        wasm.load("edge", "${edge_filter}");
+        wasm.set_allowed_upstreams("${s2_addr}:${s2_port},${s3_addr}:${s3_port}");
+        wasm.set_http_call_limit(10);
+    }
+
+    sub vcl_recv {
+        set req.backend_hint = be1;
+
+        # Use s3 (returns 403) for requests with X-Use-Bad-Auth header
+        if (req.http.X-Use-Bad-Auth) {
+            set req.http.X-Wasm-Result =
+                wasm.proxy_wasm_on_request_configured("edge", "",
+                    {"{"auth_service":"${s3_addr}:${s3_port}","enrich_headers":false,"bot_patterns":[],"blocked_countries":[],"rate_limit":{"requests_per_second":100,"window_seconds":60}}"});
+        } else {
+            set req.http.X-Wasm-Result =
+                wasm.proxy_wasm_on_request_configured("edge", "",
+                    {"{"auth_service":"${s2_addr}:${s2_port}","enrich_headers":false,"bot_patterns":[],"blocked_countries":[],"rate_limit":{"requests_per_second":100,"window_seconds":60}}"});
+        }
+
+        if (req.http.X-Wasm-Result == "401") {
+            return (synth(401, "Auth Failed"));
+        }
+        if (req.http.X-Wasm-Result == "503") {
+            return (synth(503, "Auth Unavailable"));
+        }
+    }
+
+    sub vcl_synth {
+        if (resp.status == 401) {
+            set resp.http.X-Wasm-Auth = "failed";
+        }
+    }
+} -start
+
+# Test 1: Request with valid auth token → callout to s2 → 200 → pass through
+client c1 {
+    txreq -url "/api/data" -hdr "Authorization: Bearer valid-token"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "Backend OK"
+} -run
+
+# Test 2: Request with auth token → callout to s3 (returns 403) → filter sends 401
+client c2 {
+    txreq -url "/api/data" -hdr "Authorization: Bearer bad-token" -hdr "X-Use-Bad-Auth: 1"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Auth == "failed"
+} -run
+
+# Test 3: Request without auth header → no callout, pass through normally
+client c3 {
+    txreq -url "/public/page"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "Backend OK"
+} -run

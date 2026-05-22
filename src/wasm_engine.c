@@ -1168,10 +1168,25 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 				wasmtime_error_delete(cb_err);
 			if (cb_trap != NULL)
 				wasm_trap_delete(cb_trap);
+
+			/*
+			 * After successful callback, reset action to
+			 * CONTINUE so the request proceeds (the original
+			 * PAUSE was only to wait for the HTTP call).
+			 * If the callback sent a local response, return
+			 * the status code immediately.
+			 */
+			if (proxy_ctx.local_response_set) {
+				*status_code =
+				    proxy_ctx.local_response_code;
+				ret = 0;
+				goto cleanup;
+			}
+			action = 0;
 		}
 	}
 
-	/* Check if module called send_local_response */
+	/* Check if module called send_local_response (bot block, geo block, etc.) */
 	if (proxy_ctx.local_response_set) {
 		*status_code = proxy_ctx.local_response_code;
 		ret = 0;
@@ -1314,7 +1329,10 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
 	call_wasm_void(context, &instance, "proxy_on_delete", args, 1);
 
-	*status_code = 0;
+	if (proxy_ctx.local_response_set)
+		*status_code = proxy_ctx.local_response_code;
+	else
+		*status_code = 0;
 	ret = (int)action;
 
 cleanup:
