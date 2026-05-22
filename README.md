@@ -4,6 +4,10 @@ A Varnish VMOD that executes WebAssembly modules for HTTP request processing at 
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
 [![CI](https://github.com/RamazanKara/vmod-wasm/actions/workflows/ci.yml/badge.svg)](https://github.com/RamazanKara/vmod-wasm/actions)
+![Wasmtime](https://img.shields.io/badge/Wasmtime-v44.0.0-blue)
+![Varnish](https://img.shields.io/badge/Varnish-8.0%2B-purple)
+![Proxy-Wasm ABI](https://img.shields.io/badge/Proxy--Wasm%20ABI-v0.2.1-green)
+
 
 ## Overview
 
@@ -134,7 +138,17 @@ impl HttpContext for MyFilter {
 impl Context for MyFilter {}
 ```
 
-See [`examples/`](examples/) for complete examples.
+See [`examples/`](examples/) for complete examples, including the
+[edge-security-filter](examples/edge-security-filter/) — a production-grade
+module demonstrating rate limiting, bot detection, HTTP callouts, and metrics.
+
+## Getting Started
+
+New to vmod-wasm? Start here:
+
+1. [Development Guide](docs/DEVELOPMENT.md) — Write, build, test, and deploy your first Proxy-Wasm module
+2. [Configuration Reference](docs/CONFIGURATION.md) — All VCL functions and recommended settings
+3. [Architecture](docs/ARCHITECTURE.md) — How vmod-wasm works internally
 
 ## Building
 
@@ -164,21 +178,43 @@ docker run --rm vmod-wasm-dev make check
 ## Architecture
 
 ```
-VCL -> vmod_wasm.c -> wasm_engine.c -> Wasmtime -> .wasm module
-                           |
-             host_functions.c (env + WASI)
-             proxy_wasm.c     (Proxy-Wasm ABI)
-             proxy_wasm_http.c (HTTP callouts)
-             store_pool.c     (instance pooling)
-             http_pool.c      (connection pooling)
-             vdp_wasm.c       (response body streaming)
+                         ┌────────────────┐
+                         │   VCL Config   │
+                         └───────┬────────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │      vmod_wasm.c        │
+                    │  (VCL function layer)   │
+                    └────────────┬────────────┘
+                                 │
+            ┌────────────────────┼───────────────────┐
+            │                    │                   │
+  ┌─────────▼──────┐  ┌─────────▼────────┐  ┌──────▼────────┐
+  │ wasm_engine.c  │  │ proxy_wasm.c     │  │ host_funcs.c  │
+  │ (Wasmtime)     │  │ (ABI lifecycle)  │  │ (env + WASI)  │
+  └─────────┬──────┘  └─────────┬────────┘  └───────────────┘
+            │                    │
+  ┌─────────▼──────┐  ┌─────────▼────────┐
+  │ store_pool.c   │  │ proxy_wasm_      │
+  │ (instance pool)│  │ http/shared/     │
+  └────────────────┘  │ headers/metrics  │
+                       └─────────┬────────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │      http_pool.c       │
+                    │  (connection pool +    │
+                    │   circuit breaker)     │
+                    └────────────────────────┘
 ```
 
 ## Documentation
 
+- [Architecture](docs/ARCHITECTURE.md) — Detailed component design and request lifecycle
+- [Development Guide](docs/DEVELOPMENT.md) — Writing your first Proxy-Wasm module
+- [Configuration Reference](docs/CONFIGURATION.md) — All VCL functions with parameters
 - [Proxy-Wasm Compatibility](docs/COMPATIBILITY.md) — ABI coverage matrix
-- [Security Model](docs/SECURITY.md) — isolation, threat model, controls
-- [Production Guide](docs/PRODUCTION.md) — deployment, monitoring, tuning
+- [Security Model](docs/SECURITY.md) — Isolation, threat model, supply chain security
+- [Production Guide](docs/PRODUCTION.md) — Deployment, hot-reload, monitoring, capacity planning
 
 ## License
 
@@ -186,4 +222,4 @@ CC BY-NC 4.0 — see [LICENSE](LICENSE).
 
 ## Contributing
 
-Contributions welcome.
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

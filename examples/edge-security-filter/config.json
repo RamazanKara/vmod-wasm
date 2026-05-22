@@ -1,0 +1,10 @@
+{
+  "rate_limit": {
+    "requests_per_second": 100,
+    "window_seconds": 60
+  },
+  "bot_patterns": ["BadBot", "Scraper", "Crawler/Malicious"],
+  "blocked_countries": [],
+  "enrich_headers": true,
+  "auth_service": ""
+}

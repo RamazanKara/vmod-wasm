@@ -173,6 +173,75 @@ pw_trailer_clear(struct vwasm_trailer_map *tm)
 }
 
 /* ----------------------------------------------------------------
+ * HTTP call response header helpers
+ *
+ * Parse raw HTTP response stored in ctx->http_response to extract
+ * headers.  The raw format is: "HTTP/1.1 200 OK\r\n<headers>\r\n\r\n<body>"
+ * ---------------------------------------------------------------- */
+
+/*
+ * Find a header value in the raw HTTP call response.
+ * For ":status" pseudo-header, returns the status code string.
+ * Returns pointer to value (within raw_buf) and sets *val_len.
+ * Returns NULL if not found.
+ */
+static const char *
+pw_http_call_response_find_header(const struct vwasm_proxy_ctx *ctx,
+    const char *key, size_t *val_len)
+{
+	const char *raw, *end, *p, *line_end;
+	size_t key_len;
+
+	if (!ctx->http_response.valid || ctx->http_response.raw_buf == NULL)
+		return (NULL);
+
+	raw = (const char *)ctx->http_response.raw_buf;
+	end = raw + ctx->http_response.raw_len;
+
+	/* Find end of status line */
+	p = raw;
+	line_end = strstr(p, "\r\n");
+	if (line_end == NULL)
+		return (NULL);
+
+	/* Handle :status pseudo-header */
+	if (strcmp(key, ":status") == 0) {
+		/* Parse "HTTP/1.x <status> <reason>" */
+		const char *sp = memchr(p, ' ', (size_t)(line_end - p));
+		if (sp == NULL)
+			return (NULL);
+		sp++;
+		const char *sp2 = memchr(sp, ' ', (size_t)(line_end - sp));
+		if (sp2 == NULL)
+			sp2 = line_end;
+		*val_len = (size_t)(sp2 - sp);
+		return (sp);
+	}
+
+	/* Search headers after status line */
+	key_len = strlen(key);
+	p = line_end + 2;
+	while (p < end) {
+		line_end = strstr(p, "\r\n");
+		if (line_end == NULL || line_end == p)
+			break; /* end of headers */
+
+		/* Check if this line matches "key: value" */
+		if ((size_t)(line_end - p) > key_len + 1 &&
+		    strncasecmp(p, key, key_len) == 0 &&
+		    p[key_len] == ':') {
+			const char *v = p + key_len + 1;
+			while (v < line_end && (*v == ' ' || *v == '\t'))
+				v++;
+			*val_len = (size_t)(line_end - v);
+			return (v);
+		}
+		p = line_end + 2;
+	}
+	return (NULL);
+}
+
+/* ----------------------------------------------------------------
  * proxy_get_header_map_value
  * ---------------------------------------------------------------- */
 
@@ -219,6 +288,27 @@ pw_proxy_get_header_map_value(void *env, wasmtime_caller_t *caller,
 			return (NULL);
 		}
 		if (pw_return_string(ctx, val, val_len,
+		    (uint32_t)args[3].of.i32,
+		    (uint32_t)args[4].of.i32) != 0) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	/* Handle HTTP call response headers (map_type 6) */
+	if (map_type == PROXY_MAP_HTTP_CALL_RESP_HEADERS) {
+		size_t hval_len;
+		const char *hval;
+
+		hval = pw_http_call_response_find_header(ctx, key_buf,
+		    &hval_len);
+		if (hval == NULL) {
+			results[0].of.i32 = PROXY_NOT_FOUND;
+			return (NULL);
+		}
+		if (pw_return_string(ctx, hval, hval_len,
 		    (uint32_t)args[3].of.i32,
 		    (uint32_t)args[4].of.i32) != 0) {
 			results[0].of.i32 = PROXY_INTERNAL;
@@ -314,7 +404,8 @@ pw_proxy_add_header_map_value(void *env, wasmtime_caller_t *caller,
 	}
 
 	snprintf(hdr_line, sizeof(hdr_line), "%s: %s", key_buf, val_buf);
-	http_SetHeader(hp, hdr_line);
+	http_SetHeader(hp,
+	    WS_Copy(ctx->vrt_ctx->ws, hdr_line, (int)(strlen(hdr_line) + 1)));
 
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);
@@ -379,7 +470,8 @@ pw_proxy_replace_header_map_value(void *env, wasmtime_caller_t *caller,
 	}
 
 	snprintf(hdr_line, sizeof(hdr_line), "%s: %s", key_buf, val_buf);
-	http_SetHeader(hp, hdr_line);
+	http_SetHeader(hp,
+	    WS_Copy(ctx->vrt_ctx->ws, hdr_line, (int)(strlen(hdr_line) + 1)));
 
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);
@@ -534,6 +626,112 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 			return (NULL);
 		}
 		free(tbuf);
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	/* Handle HTTP call response headers (map_type 6) */
+	if (map_type == PROXY_MAP_HTTP_CALL_RESP_HEADERS) {
+		const char *raw, *raw_end, *p, *line_end;
+		uint8_t *hbuf;
+		size_t hsize;
+		uint32_t hcount, hoffset;
+		struct { const char *k; size_t kl; const char *v; size_t vl; } hdrs[64];
+
+		if (!ctx->http_response.valid ||
+		    ctx->http_response.raw_buf == NULL) {
+			if (pw_return_bytes(ctx, NULL, 0,
+			    (uint32_t)args[1].of.i32,
+			    (uint32_t)args[2].of.i32) != 0) {
+				results[0].of.i32 = PROXY_INTERNAL;
+				return (NULL);
+			}
+			results[0].of.i32 = PROXY_OK;
+			return (NULL);
+		}
+
+		raw = (const char *)ctx->http_response.raw_buf;
+		raw_end = raw + ctx->http_response.raw_len;
+		hcount = 0;
+
+		/* Parse status line → :status pseudo-header */
+		line_end = strstr(raw, "\r\n");
+		if (line_end != NULL) {
+			const char *sp = memchr(raw, ' ',
+			    (size_t)(line_end - raw));
+			if (sp != NULL) {
+				sp++;
+				const char *sp2 = memchr(sp, ' ',
+				    (size_t)(line_end - sp));
+				if (sp2 == NULL) sp2 = line_end;
+				hdrs[hcount].k = ":status";
+				hdrs[hcount].kl = 7;
+				hdrs[hcount].v = sp;
+				hdrs[hcount].vl = (size_t)(sp2 - sp);
+				hcount++;
+			}
+			p = line_end + 2;
+		} else {
+			p = raw_end;
+		}
+
+		/* Parse remaining headers */
+		while (p < raw_end && hcount < 64) {
+			line_end = strstr(p, "\r\n");
+			if (line_end == NULL || line_end == p)
+				break;
+			const char *colon = memchr(p, ':',
+			    (size_t)(line_end - p));
+			if (colon != NULL) {
+				const char *v = colon + 1;
+				while (v < line_end &&
+				    (*v == ' ' || *v == '\t'))
+					v++;
+				hdrs[hcount].k = p;
+				hdrs[hcount].kl = (size_t)(colon - p);
+				hdrs[hcount].v = v;
+				hdrs[hcount].vl = (size_t)(line_end - v);
+				hcount++;
+			}
+			p = line_end + 2;
+		}
+
+		/* Serialize in proxy-wasm format */
+		hsize = 4 + (size_t)hcount * 8;
+		for (i = 0; i < hcount; i++)
+			hsize += hdrs[i].kl + 1 + hdrs[i].vl + 1;
+
+		hbuf = malloc(hsize);
+		if (hbuf == NULL) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+
+		memcpy(hbuf, &hcount, 4);
+		hoffset = 4;
+		for (i = 0; i < hcount; i++) {
+			uint32_t kl = (uint32_t)hdrs[i].kl;
+			uint32_t vl = (uint32_t)hdrs[i].vl;
+			memcpy(hbuf + hoffset, &kl, 4); hoffset += 4;
+			memcpy(hbuf + hoffset, &vl, 4); hoffset += 4;
+		}
+		for (i = 0; i < hcount; i++) {
+			memcpy(hbuf + hoffset, hdrs[i].k, hdrs[i].kl);
+			hoffset += (uint32_t)hdrs[i].kl;
+			hbuf[hoffset++] = '\0';
+			memcpy(hbuf + hoffset, hdrs[i].v, hdrs[i].vl);
+			hoffset += (uint32_t)hdrs[i].vl;
+			hbuf[hoffset++] = '\0';
+		}
+
+		if (pw_return_bytes(ctx, hbuf, hoffset,
+		    (uint32_t)args[1].of.i32,
+		    (uint32_t)args[2].of.i32) != 0) {
+			free(hbuf);
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		free(hbuf);
 		results[0].of.i32 = PROXY_OK;
 		return (NULL);
 	}

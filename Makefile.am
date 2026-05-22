@@ -22,6 +22,7 @@ check-local:
 				-Dwasm_passthrough="$(abs_top_srcdir)/tests/wasm/passthrough.wasm" \
 				-Dwasm_transform="$(abs_top_srcdir)/tests/wasm/transform.wasm" \
 				-Dsdk_module="$(abs_top_srcdir)/tests/wasm/proxy_wasm_filter.wasm" \
+				-Dedge_filter="$(abs_top_srcdir)/tests/wasm/edge_security_filter.wasm" \
 				$$t || exit 1; \
 		done; \
 	else \

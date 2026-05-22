@@ -6,16 +6,58 @@ on:
   pull_request:
     branches: [main]
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+env:
+  CARGO_TERM_COLOR: always
 
+jobs:
+  lint:
+    name: Rust Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        working-directory: examples
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        working-directory: examples
+        run: cargo clippy --target wasm32-unknown-unknown --all-targets -- -D warnings
+
+      - name: Audit dependencies
+        run: |
+          cargo install cargo-audit --quiet
+          cd examples && cargo audit
+
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test in Docker
+      - name: Build Docker image
+        run: docker build -t vmod-wasm-ci .
+
+      - name: Run tests
+        run: docker run --rm vmod-wasm-ci make check
+
+      - name: Check binary sizes
         run: |
-          docker build \
-            --build-arg WASMTIME_VERSION=44.0.0 \
-            -t vmod-wasm-test .
-          docker run --rm vmod-wasm-test make check
+          docker run --rm vmod-wasm-ci sh -c '
+            MAX_SIZE=512000
+            FAILED=0
+            for f in /src/tests/wasm/*.wasm; do
+              SIZE=$(stat -c%s "$f")
+              NAME=$(basename "$f")
+              echo "$NAME: $SIZE bytes"
+              if [ $SIZE -gt $MAX_SIZE ]; then
+                echo "ERROR: $NAME exceeds 500 KiB limit ($SIZE bytes)"
+                FAILED=1
+              fi
+            done
+            exit $FAILED
+          '

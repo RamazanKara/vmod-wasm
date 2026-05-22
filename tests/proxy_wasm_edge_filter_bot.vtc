@@ -1,0 +1,55 @@
+varnishtest "edge-security-filter: bot detection blocks matching User-Agent"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("edge", "${edge_filter}");
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request("edge");
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(403, "Blocked"));
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Resp =
+            wasm.proxy_wasm_on_response("edge");
+    }
+} -start
+
+# Request with "BadBot" in User-Agent should be blocked (403)
+client c1 {
+    txreq -url "/" -hdr "User-Agent: BadBot/1.0"
+    rxresp
+    expect resp.status == 403
+} -run
+
+# Request with "Scraper" in User-Agent should also be blocked
+client c2 {
+    txreq -url "/" -hdr "User-Agent: MyScraper Agent"
+    rxresp
+    expect resp.status == 403
+} -run
+
+# Normal User-Agent should pass
+client c3 {
+    txreq -url "/" -hdr "User-Agent: Mozilla/5.0"
+    rxresp
+    expect resp.status == 200
+} -run
+
+# Case-insensitive match: "badbot" should also be blocked
+client c4 {
+    txreq -url "/" -hdr "User-Agent: some badbot crawler"
+    rxresp
+    expect resp.status == 403
+} -run

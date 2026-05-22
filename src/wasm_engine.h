@@ -25,7 +25,7 @@ struct wasm_module_entry {
 #define VWASM_DEFAULT_STACKSIZE	(512 * 1024)		/* 512 KiB */
 
 /* Epoch-based interruption for execution time limiting */
-#define VWASM_DEFAULT_EPOCH_DEADLINE_MS	100	/* 100ms per callback */
+#define VWASM_DEFAULT_EPOCH_DEADLINE_MS	5000	/* 5000ms per callback */
 #define VWASM_EPOCH_TICK_MS		1	/* Timer thread ticks every 1ms */
 
 /* Default HTTP timeout for proxy_http_call */

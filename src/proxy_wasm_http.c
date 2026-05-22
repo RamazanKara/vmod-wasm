@@ -115,7 +115,8 @@ pw_is_private_addr(const struct sockaddr *sa)
 }
 
 static int
-pw_http_connect(const char *host, uint16_t port, int timeout_ms)
+pw_http_connect(const char *host, uint16_t port, int timeout_ms,
+    int ssrf_exempt)
 {
 	struct addrinfo hints, *res, *rp;
 	char port_str[8];
@@ -132,8 +133,9 @@ pw_http_connect(const char *host, uint16_t port, int timeout_ms)
 		return (-1);
 
 	for (rp = res; rp != NULL; rp = rp->ai_next) {
-		/* Anti-IP-rebinding: reject private/internal IPs */
-		if (pw_is_private_addr(rp->ai_addr)) {
+		/* Anti-IP-rebinding: reject private/internal IPs
+		 * unless the upstream was explicitly allowed */
+		if (!ssrf_exempt && pw_is_private_addr(rp->ai_addr)) {
 			continue;
 		}
 
@@ -241,6 +243,7 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	size_t i;
 	struct vwasm_http_pool *http_pool;
 	struct vwasm_http_conn *pool_conn = NULL;
+	int ssrf_exempt = 0;
 
 	(void)env;
 	(void)nargs;
@@ -310,6 +313,7 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 			results[0].of.i32 = PROXY_BAD_ARGUMENT;
 			return (NULL);
 		}
+		ssrf_exempt = 1;
 	}
 
 	/*
@@ -368,22 +372,32 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	}
 
 	/* Build HTTP/1.1 request */
-	if (body_size > 0 && pw_validate_region(ctx, body_ptr, body_size)) {
-		req_len = snprintf(request_buf, sizeof(request_buf),
-		    "%s %s HTTP/1.1\r\n"
-		    "Host: %s\r\n"
-		    "Content-Length: %u\r\n"
-		    "Connection: keep-alive\r\n"
-		    "%s\r\n",
-		    method, path, host, body_size, extra_headers);
-	} else {
-		body_size = 0;
-		req_len = snprintf(request_buf, sizeof(request_buf),
-		    "%s %s HTTP/1.1\r\n"
-		    "Host: %s\r\n"
-		    "Connection: keep-alive\r\n"
-		    "%s\r\n",
-		    method, path, host, extra_headers);
+	{
+		const char *conn_hdr = (pool_conn != NULL) ?
+		    "Connection: keep-alive" : "Connection: close";
+
+		if (body_size > 0 &&
+		    pw_validate_region(ctx, body_ptr, body_size)) {
+			req_len = snprintf(request_buf,
+			    sizeof(request_buf),
+			    "%s %s HTTP/1.1\r\n"
+			    "Host: %s\r\n"
+			    "Content-Length: %u\r\n"
+			    "%s\r\n"
+			    "%s\r\n",
+			    method, path, host, body_size,
+			    conn_hdr, extra_headers);
+		} else {
+			body_size = 0;
+			req_len = snprintf(request_buf,
+			    sizeof(request_buf),
+			    "%s %s HTTP/1.1\r\n"
+			    "Host: %s\r\n"
+			    "%s\r\n"
+			    "%s\r\n",
+			    method, path, host,
+			    conn_hdr, extra_headers);
+		}
 	}
 
 	if (req_len <= 0 || req_len >= (int)sizeof(request_buf)) {
@@ -397,7 +411,8 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 		fd = vwasm_http_pool_acquire(http_pool, host,
 		    port, timeout_ms, &pool_conn);
 	} else {
-		fd = pw_http_connect(host, port, (int)timeout_ms);
+		fd = pw_http_connect(host, port, (int)timeout_ms,
+		    ssrf_exempt);
 	}
 
 	if (fd < 0) {
@@ -436,7 +451,7 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 		}
 	}
 
-	/* Read response */
+	/* Read response (Content-Length aware to avoid blocking) */
 	response_buf = malloc(PW_HTTP_MAX_RESPONSE);
 	if (response_buf == NULL) {
 		if (pool_conn != NULL)
@@ -448,12 +463,59 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	}
 
 	response_len = 0;
-	while (response_len < PW_HTTP_MAX_RESPONSE) {
-		n = read(fd, response_buf + response_len,
-		    PW_HTTP_MAX_RESPONSE - response_len);
-		if (n <= 0)
-			break;
-		response_len += (size_t)n;
+	{
+		char *hdr_end = NULL;
+		size_t content_length = 0;
+		int cl_found = 0;
+
+		/* Phase 1: read until end of headers (\r\n\r\n) */
+		while (response_len < PW_HTTP_MAX_RESPONSE) {
+			n = read(fd, response_buf + response_len,
+			    PW_HTTP_MAX_RESPONSE - response_len);
+			if (n <= 0)
+				break;
+			response_len += (size_t)n;
+			response_buf[response_len] = '\0';
+			hdr_end = strstr((char *)response_buf, "\r\n\r\n");
+			if (hdr_end != NULL)
+				break;
+		}
+
+		/* Phase 2: parse Content-Length and read remaining body */
+		if (hdr_end != NULL) {
+			char *cl;
+
+			hdr_end += 4; /* skip \r\n\r\n */
+			cl = strcasestr((char *)response_buf,
+			    "Content-Length:");
+			if (cl != NULL && cl < hdr_end) {
+				content_length = (size_t)atoi(cl + 15);
+				cl_found = 1;
+			}
+
+			if (cl_found) {
+				size_t body_have = response_len -
+				    (size_t)(hdr_end -
+				    (char *)response_buf);
+				size_t body_need = (content_length > body_have)
+				    ? content_length - body_have : 0;
+
+				while (body_need > 0 &&
+				    response_len < PW_HTTP_MAX_RESPONSE) {
+					n = read(fd,
+					    response_buf + response_len,
+					    (body_need <
+					    PW_HTTP_MAX_RESPONSE - response_len)
+					    ? body_need
+					    : PW_HTTP_MAX_RESPONSE -
+					    response_len);
+					if (n <= 0)
+						break;
+					response_len += (size_t)n;
+					body_need -= (size_t)n;
+				}
+			}
+		}
 	}
 
 	/* Release connection back to pool (keep-alive) */
@@ -533,47 +595,18 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	}
 
 	/*
-	 * Call proxy_on_http_call_response per Proxy-Wasm ABI spec.
-	 * The module receives the callback with response data accessible
-	 * via proxy_get_buffer_bytes(HTTP_CALL_RESPONSE_BODY/HEADERS).
+	 * Defer proxy_on_http_call_response to after the current host
+	 * function returns.  The proxy-wasm SDK uses RefCell internally
+	 * and panics on re-entrant borrow if we call the callback from
+	 * within the same execution of proxy_on_http_request_headers.
+	 *
+	 * The engine (wasm_engine.c) checks http_call_pending after the
+	 * header function returns and invokes the callback then.
 	 */
-	{
-		wasmtime_extern_t cb_item;
-		if (wasmtime_caller_export_get(caller,
-		    "proxy_on_http_call_response", 27, &cb_item) &&
-		    cb_item.kind == WASMTIME_EXTERN_FUNC) {
-			wasmtime_val_t cb_args[5];
-			wasmtime_context_t *cb_ctx;
-			wasmtime_error_t *cb_err;
-			wasm_trap_t *cb_trap = NULL;
-
-			cb_ctx = wasmtime_caller_context(caller);
-
-			/* Extend epoch deadline for the callback */
-			wasmtime_context_set_epoch_deadline(cb_ctx,
-			    VWASM_DEFAULT_EPOCH_DEADLINE_MS);
-
-			cb_args[0].kind = WASMTIME_I32;
-			cb_args[0].of.i32 =
-			    (int32_t)ctx->stream_context_id;
-			cb_args[1].kind = WASMTIME_I32;
-			cb_args[1].of.i32 = (int32_t)token_id;
-			cb_args[2].kind = WASMTIME_I32;
-			cb_args[2].of.i32 = (int32_t)resp_num_headers;
-			cb_args[3].kind = WASMTIME_I32;
-			cb_args[3].of.i32 = (int32_t)resp_body_len;
-			cb_args[4].kind = WASMTIME_I32;
-			cb_args[4].of.i32 = 0; /* num_trailers */
-
-			cb_err = wasmtime_func_call(cb_ctx,
-			    &cb_item.of.func, cb_args, 5,
-			    NULL, 0, &cb_trap);
-			if (cb_err != NULL)
-				wasmtime_error_delete(cb_err);
-			if (cb_trap != NULL)
-				wasm_trap_delete(cb_trap);
-		}
-	}
+	ctx->http_call_pending = 1;
+	ctx->http_call_token_id = token_id;
+	ctx->http_call_num_headers = resp_num_headers;
+	ctx->http_call_body_len = resp_body_len;
 
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);

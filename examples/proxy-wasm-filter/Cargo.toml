@@ -7,8 +7,4 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-proxy-wasm = "0.2"
-
-[profile.release]
-opt-level = "s"
-lto = true
+proxy-wasm.workspace = true

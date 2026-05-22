@@ -1062,6 +1062,8 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	call_wasm_void(context, &instance, "_initialize", NULL, 0);
 
 	/* 1. Create root context */
+	wasmtime_context_set_epoch_deadline(context,
+	    engine->epoch_deadline_ms);
 	args[0].kind = WASMTIME_I32;
 	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
 	args[1].kind = WASMTIME_I32;
@@ -1070,6 +1072,8 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	    "proxy_on_context_create", args, 2);
 
 	/* 2. VM start */
+	wasmtime_context_set_epoch_deadline(context,
+	    engine->epoch_deadline_ms);
 	args[0].kind = WASMTIME_I32;
 	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
 	args[1].kind = WASMTIME_I32;
@@ -1078,6 +1082,8 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	    "proxy_on_vm_start", args, 2, NULL);
 
 	/* 3. Configure */
+	wasmtime_context_set_epoch_deadline(context,
+	    engine->epoch_deadline_ms);
 	args[0].kind = WASMTIME_I32;
 	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
 	args[1].kind = WASMTIME_I32;
@@ -1086,6 +1092,8 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	    "proxy_on_configure", args, 2, NULL);
 
 	/* 4. Create stream context */
+	wasmtime_context_set_epoch_deadline(context,
+	    engine->epoch_deadline_ms);
 	args[0].kind = WASMTIME_I32;
 	args[0].of.i32 = (int32_t)proxy_ctx.stream_context_id;
 	args[1].kind = WASMTIME_I32;
@@ -1094,6 +1102,8 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	    "proxy_on_context_create", args, 2);
 
 	/* 5. Call phase-specific headers callback */
+	wasmtime_context_set_epoch_deadline(context,
+	    engine->epoch_deadline_ms);
 	if (phase == VWASM_PHASE_REQUEST) {
 		hp = ctx->http_req;
 	} else {
@@ -1114,6 +1124,51 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	    phase_headers_fn, args, 3, &action) != 0) {
 		log_error(ctx, NULL, module_name, phase_headers_fn);
 		goto cleanup;
+	}
+
+	/*
+	 * Deferred HTTP call callback: if proxy_http_call stored a
+	 * response during the header function, invoke the callback now
+	 * that the header function has returned (avoids RefCell panic
+	 * in the proxy-wasm Rust SDK from re-entrant borrows).
+	 */
+	if (proxy_ctx.http_call_pending) {
+		wasmtime_extern_t cb_item;
+		proxy_ctx.http_call_pending = 0;
+
+		if (wasmtime_instance_export_get(context, &instance,
+		    "proxy_on_http_call_response", 27, &cb_item) &&
+		    cb_item.kind == WASMTIME_EXTERN_FUNC) {
+			wasmtime_val_t cb_args[5];
+			wasmtime_error_t *cb_err;
+			wasm_trap_t *cb_trap = NULL;
+
+			wasmtime_context_set_epoch_deadline(context,
+			    VWASM_DEFAULT_EPOCH_DEADLINE_MS);
+
+			cb_args[0].kind = WASMTIME_I32;
+			cb_args[0].of.i32 =
+			    (int32_t)proxy_ctx.stream_context_id;
+			cb_args[1].kind = WASMTIME_I32;
+			cb_args[1].of.i32 =
+			    (int32_t)proxy_ctx.http_call_token_id;
+			cb_args[2].kind = WASMTIME_I32;
+			cb_args[2].of.i32 =
+			    (int32_t)proxy_ctx.http_call_num_headers;
+			cb_args[3].kind = WASMTIME_I32;
+			cb_args[3].of.i32 =
+			    (int32_t)proxy_ctx.http_call_body_len;
+			cb_args[4].kind = WASMTIME_I32;
+			cb_args[4].of.i32 = 0; /* num_trailers */
+
+			cb_err = wasmtime_func_call(context,
+			    &cb_item.of.func, cb_args, 5,
+			    NULL, 0, &cb_trap);
+			if (cb_err != NULL)
+				wasmtime_error_delete(cb_err);
+			if (cb_trap != NULL)
+				wasm_trap_delete(cb_trap);
+		}
 	}
 
 	/* Check if module called send_local_response */

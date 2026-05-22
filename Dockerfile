@@ -1,4 +1,4 @@
-FROM varnish:9.0.1
+FROM varnish:9.0.3
 
 ARG WASMTIME_VERSION=44.0.0
 
@@ -40,24 +40,15 @@ WORKDIR /src
 
 COPY . .
 
-# Build the test Wasm module (raw ABI)
-RUN cd examples/rust && cargo build --release \
+# Build all Wasm example modules via workspace
+RUN cd examples \
+    && cargo build --release --target wasm32-unknown-unknown \
     && mkdir -p /src/tests/wasm \
-    && cp target/wasm32-unknown-unknown/release/test_module.wasm /src/tests/wasm/
-
-# Build the proxy-wasm SDK test module
-RUN cd examples/proxy-wasm-filter && cargo build --release \
-    && cp target/wasm32-unknown-unknown/release/proxy_wasm_filter.wasm /src/tests/wasm/
-
-# Build passthrough filter module (for filter chain tests)
-RUN cd examples/passthrough \
-    && cargo build --target wasm32-unknown-unknown --release \
-    && cp target/wasm32-unknown-unknown/release/passthrough.wasm /src/tests/wasm/
-
-# Build transform filter module (for filter chain tests)
-RUN cd examples/transform \
-    && cargo build --target wasm32-unknown-unknown --release \
-    && cp target/wasm32-unknown-unknown/release/transform.wasm /src/tests/wasm/
+    && cp target/wasm32-unknown-unknown/release/test_module.wasm /src/tests/wasm/ \
+    && cp target/wasm32-unknown-unknown/release/proxy_wasm_filter.wasm /src/tests/wasm/ \
+    && cp target/wasm32-unknown-unknown/release/passthrough.wasm /src/tests/wasm/ \
+    && cp target/wasm32-unknown-unknown/release/transform.wasm /src/tests/wasm/ \
+    && cp target/wasm32-unknown-unknown/release/edge_security_filter.wasm /src/tests/wasm/
 
 # Build the VMOD
 RUN echo "3.1.0" > vmod_vcs_version.txt \

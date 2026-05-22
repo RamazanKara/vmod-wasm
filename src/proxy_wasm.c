@@ -1056,7 +1056,7 @@ pw_proxy_increment_metric(void *env, wasmtime_caller_t *caller,
 	}
 
 	metric_id = (uint32_t)args[0].of.i32;
-	offset = (int64_t)args[1].of.i32;
+	offset = args[1].of.i64;
 
 	pthread_rwlock_wrlock(&store->rwlock);
 
@@ -1101,8 +1101,7 @@ pw_proxy_record_metric(void *env, wasmtime_caller_t *caller,
 	}
 
 	metric_id = (uint32_t)args[0].of.i32;
-	/* Wasm32 SDKs pass value as i32; cast to u64 for storage */
-	value = (uint64_t)(uint32_t)args[1].of.i32;
+	value = (uint64_t)args[1].of.i64;
 
 	pthread_rwlock_wrlock(&store->rwlock);
 
@@ -1449,12 +1448,20 @@ vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker)
 	if (pw_define_func(linker, "proxy_define_metric", 4, 1,
 	    pw_proxy_define_metric) != 0)
 		return (-1);
-	if (pw_define_func(linker, "proxy_increment_metric", 2, 1,
-	    pw_proxy_increment_metric) != 0)
-		return (-1);
-	if (pw_define_func(linker, "proxy_record_metric", 2, 1,
-	    pw_proxy_record_metric) != 0)
-		return (-1);
+	{
+		/* proxy_increment_metric(metric_id: i32, offset: i64) -> i32 */
+		static const wasm_valkind_t inc_params[] = {WASM_I32, WASM_I64};
+		if (pw_define_func_typed(linker, "proxy_increment_metric",
+		    inc_params, 2, 1, pw_proxy_increment_metric) != 0)
+			return (-1);
+	}
+	{
+		/* proxy_record_metric(metric_id: i32, value: u64) -> i32 */
+		static const wasm_valkind_t rec_params[] = {WASM_I32, WASM_I64};
+		if (pw_define_func_typed(linker, "proxy_record_metric",
+		    rec_params, 2, 1, pw_proxy_record_metric) != 0)
+			return (-1);
+	}
 	if (pw_define_func(linker, "proxy_get_metric", 2, 1,
 	    pw_proxy_get_metric) != 0)
 		return (-1);

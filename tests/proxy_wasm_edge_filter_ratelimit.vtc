@@ -1,0 +1,62 @@
+varnishtest "edge-security-filter: rate limiting blocks after threshold"
+
+server s1 -repeat 5 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("edge", "${edge_filter}");
+    }
+
+    sub vcl_recv {
+        # Use configured rate limit of 3 requests per window for testing
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request_configured("edge", "",
+                {"{"rate_limit":{"requests_per_second":3,"window_seconds":60},"bot_patterns":[],"enrich_headers":true}"});
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(429, "Rate Limited"));
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Resp =
+            wasm.proxy_wasm_on_response("edge");
+    }
+} -start
+
+# First 3 requests from same IP should pass
+client c1 {
+    txreq -url "/1" -hdr "User-Agent: Chrome" -hdr "X-Forwarded-For: 10.0.0.1"
+    rxresp
+    expect resp.status == 200
+} -run
+
+client c2 {
+    txreq -url "/2" -hdr "User-Agent: Chrome" -hdr "X-Forwarded-For: 10.0.0.1"
+    rxresp
+    expect resp.status == 200
+} -run
+
+client c3 {
+    txreq -url "/3" -hdr "User-Agent: Chrome" -hdr "X-Forwarded-For: 10.0.0.1"
+    rxresp
+    expect resp.status == 200
+} -run
+
+# 4th request should be rate limited (429)
+client c4 {
+    txreq -url "/4" -hdr "User-Agent: Chrome" -hdr "X-Forwarded-For: 10.0.0.1"
+    rxresp
+    expect resp.status == 429
+} -run
+
+# Request from a different IP should pass
+client c5 {
+    txreq -url "/5" -hdr "User-Agent: Chrome" -hdr "X-Forwarded-For: 10.0.0.2"
+    rxresp
+    expect resp.status == 200
+} -run

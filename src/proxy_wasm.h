@@ -52,6 +52,9 @@ typedef enum {
 	PROXY_MAP_HTTP_REQUEST_TRAILERS   = 1,
 	PROXY_MAP_HTTP_RESPONSE_HEADERS   = 2,
 	PROXY_MAP_HTTP_RESPONSE_TRAILERS  = 3,
+	PROXY_MAP_HTTP_CALL_RESP_HEADERS  = 6,
+	PROXY_MAP_HTTP_CALL_RESP_BODY     = 7,
+	PROXY_MAP_HTTP_CALL_RESP_TRAILERS = 8,
 } proxy_map_type_t;
 
 typedef enum {
@@ -198,6 +201,12 @@ struct vwasm_proxy_ctx {
 
 	/* HTTP call response (for proxy_on_http_call_response) */
 	struct vwasm_http_call_response http_response;
+
+	/* Deferred HTTP call callback (invoked after header fn returns) */
+	int			 http_call_pending;
+	uint32_t		 http_call_token_id;
+	uint32_t		 http_call_num_headers;
+	size_t			 http_call_body_len;
 
 	/* HTTP request/response body access */
 	const uint8_t		*request_body;

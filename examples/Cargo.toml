@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "rust",
+    "proxy-wasm-filter",
+    "passthrough",
+    "transform",
+    "edge-security-filter",
+]
+
+[workspace.dependencies]
+proxy-wasm = "0.2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

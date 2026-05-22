@@ -1,0 +1,52 @@
+varnishtest "edge-security-filter: plugin config changes behavior"
+
+server s1 -repeat 3 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("edge", "${edge_filter}");
+    }
+
+    sub vcl_recv {
+        # Config with custom bot pattern "EvilCrawler"
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request_configured("edge", "",
+                {"{"bot_patterns":["EvilCrawler"],"enrich_headers":true}"});
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(403, "Blocked"));
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Resp =
+            wasm.proxy_wasm_on_response("edge");
+    }
+} -start
+
+# "BadBot" should NOT be blocked with this config (only "EvilCrawler" configured)
+client c1 {
+    txreq -url "/" -hdr "User-Agent: BadBot/1.0"
+    rxresp
+    expect resp.status == 200
+} -run
+
+# "EvilCrawler" SHOULD be blocked
+client c2 {
+    txreq -url "/" -hdr "User-Agent: EvilCrawler/2.0"
+    rxresp
+    expect resp.status == 403
+} -run
+
+# Normal UA passes
+client c3 {
+    txreq -url "/" -hdr "User-Agent: Mozilla/5.0"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Content-Type-Options == "nosniff"
+    expect resp.http.X-Wasm-Processed == "true"
+} -run

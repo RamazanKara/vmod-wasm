@@ -148,6 +148,129 @@ sub vcl_deliver {
   `proxy_on_response_body` as they arrive — no buffering
 - Each chunk is forwarded to the client immediately after inspection
 - `end_of_stream=1` is set on the final chunk
+
+## Module Lifecycle Management
+
+### Hot-Reload via VCL Reload
+
+Wasm modules are loaded at `vcl_init` time. To update a module without downtime:
+
+```bash
+# 1. Deploy the new .wasm file to disk
+cp new_filter.wasm /etc/varnish/wasm/filter.wasm
+
+# 2. Load a new VCL (re-runs vcl_init, recompiles the module)
+varnishadm vcl.load reload_1 /etc/varnish/default.vcl
+
+# 3. Switch to the new VCL
+varnishadm vcl.use reload_1
+
+# 4. Discard the old VCL (frees old module memory)
+varnishadm vcl.discard boot
+```
+
+The old VCL (and its Wasm modules) remains active until all in-flight
+requests complete. No requests are dropped during the transition.
+
+### Graceful Degradation
+
+Use `set_fail_mode()` to control behavior when modules fail:
+
+| Scenario | Recommended Mode | Rationale |
+|----------|-----------------|-----------|
+| Security filter (WAF, bot detection) | `closed` | Block on failure — safety first |
+| Observability (logging, metrics) | `open` | Continue on failure — don't break traffic |
+| Header enrichment (non-critical) | `open` | Best-effort enrichment |
+| Auth validation | `closed` | Never skip auth |
+
+### Rollback Procedure
+
+If a new module causes issues:
+
+```bash
+# Keep a known-good VCL loaded
+varnishadm vcl.load safe /etc/varnish/safe.vcl
+varnishadm vcl.use safe
+```
+
+## Monitoring Integration
+
+### Prometheus Exposition
+
+Expose Wasm metrics for Prometheus scraping:
+
+```vcl
+sub vcl_recv {
+    if (req.url == "/__wasm_metrics" && req.http.X-Internal == "true") {
+        return (synth(200, "Metrics"));
+    }
+}
+
+sub vcl_synth {
+    if (req.url == "/__wasm_metrics") {
+        set resp.http.Content-Type = "application/json";
+        synthetic(wasm.get_metrics_json());
+        return (deliver);
+    }
+}
+```
+
+Convert JSON metrics to Prometheus format using a sidecar exporter or
+configure your metrics pipeline to ingest JSON directly.
+
+### Key Metrics to Alert On
+
+| Metric | Alert Threshold | Action |
+|--------|----------------|--------|
+| `edge_blocked_total` rate | > 10% of total requests | Investigate traffic pattern |
+| `edge_rate_limited_total` rate | Sudden spike | Check for DDoS |
+| `edge_auth_failures_total` rate | > 5% of auth requests | Check auth service health |
+| Wasm execution errors (VSL) | Any sustained errors | Check module health, consider rollback |
+
+### Health Check Integration
+
+Exclude the Wasm filter from health check paths to ensure monitoring is unaffected:
+
+```vcl
+sub vcl_recv {
+    if (req.url == "/health") {
+        return (synth(200, "OK"));
+    }
+    # ... wasm filter runs for all other paths ...
+}
+```
+
+## Capacity Planning
+
+### Memory Budget
+
+Per Varnish worker thread, vmod-wasm allocates:
+
+| Component | Memory | Notes |
+|-----------|--------|-------|
+| Wasm linear memory | Up to `memory_limit` per instance | Default 16 MiB |
+| Store pool instance | ~2-4 KiB overhead | Per-thread pre-allocation |
+| Compiled module | ~1-5 MiB (shared) | Single copy, all threads share |
+| HTTP connection pool | ~64 KiB per thread | Connection state + buffers |
+
+**Formula**: `total_wasm_memory = num_threads × memory_limit + compiled_module_size`
+
+With 32 threads and 8 MiB limit: `32 × 8 MiB + 3 MiB ≈ 259 MiB`
+
+### CPU Budget
+
+- Module compilation: one-time cost at VCL load (~100-500ms depending on module size)
+- Per-request execution: typically 0.1-5ms for security filters
+- Epoch ticker thread: negligible (1 thread, increments a counter)
+
+### Sizing Recommendations
+
+| Workload | Epoch Deadline | Memory Limit | HTTP Call Limit |
+|----------|---------------|-------------|-----------------|
+| Simple header filter | 50ms | 4 MiB | 0 |
+| Security filter (bot + rate limit) | 100ms | 8 MiB | 0 |
+| Auth validation (with callout) | 200ms | 8 MiB | 3 |
+| Complex transform (body inspection) | 500ms | 16 MiB | 5 |
 - Memory usage is O(chunk_size), not O(body_size)
 
 ## Upgrading Modules

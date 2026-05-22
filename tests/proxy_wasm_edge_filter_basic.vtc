@@ -1,0 +1,39 @@
+varnishtest "edge-security-filter: basic request passes with enrichment headers"
+
+server s1 {
+    rxreq
+    expect req.http.X-Request-ID != <undef>
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("edge", "${edge_filter}");
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request("edge");
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(403, "Blocked"));
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Resp =
+            wasm.proxy_wasm_on_response("edge");
+    }
+} -start
+
+# Normal request should pass through with enrichment headers
+client c1 {
+    txreq -url "/hello" -hdr "User-Agent: Mozilla/5.0 Chrome/120"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Content-Type-Options == "nosniff"
+    expect resp.http.X-Frame-Options == "DENY"
+    expect resp.http.X-Wasm-Processed == "true"
+    expect resp.http.X-Wasm-Resp == "0"
+} -run

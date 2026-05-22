@@ -1,0 +1,68 @@
+varnishtest "edge-security-filter: metrics endpoint returns counters"
+
+server s1 -repeat 3 {
+    rxreq
+    txresp -status 200 -body "OK"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("edge", "${edge_filter}");
+    }
+
+    sub vcl_recv {
+        if (req.url == "/__metrics") {
+            return (synth(200, "Metrics"));
+        }
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request("edge");
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(403, "Blocked"));
+        }
+    }
+
+    sub vcl_synth {
+        if (req.url == "/__metrics") {
+            set resp.http.Content-Type = "application/json";
+            synthetic(wasm.get_metrics_json());
+            return (deliver);
+        }
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Resp =
+            wasm.proxy_wasm_on_response("edge");
+    }
+} -start
+
+# Send a few normal requests to generate metrics
+client c1 {
+    txreq -url "/page1" -hdr "User-Agent: Chrome"
+    rxresp
+    expect resp.status == 200
+} -run
+
+client c2 {
+    txreq -url "/page2" -hdr "User-Agent: Firefox"
+    rxresp
+    expect resp.status == 200
+} -run
+
+# Send a bot request to generate a blocked metric
+client c3 {
+    txreq -url "/" -hdr "User-Agent: BadBot/1.0"
+    rxresp
+    expect resp.status == 403
+} -run
+
+# Now check the metrics endpoint
+client c4 {
+    txreq -url "/__metrics"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.Content-Type == "application/json"
+    expect resp.body ~ "edge_requests_total"
+    expect resp.body ~ "edge_blocked_total"
+} -run

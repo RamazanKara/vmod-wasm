@@ -98,3 +98,76 @@ If a Wasm module misbehaves:
 
 3. **Root cause**: Review the Wasm module source code
 4. **Fix**: Update limits, allowlists, or replace the module
+
+## Supply Chain Security
+
+### Module Verification
+
+Before deploying a `.wasm` module to production, verify its integrity:
+
+```bash
+# Generate checksum after trusted build
+sha256sum edge_security_filter.wasm > edge_security_filter.wasm.sha256
+
+# Verify before deployment
+sha256sum -c edge_security_filter.wasm.sha256
+```
+
+### Trusted Build Pipeline
+
+All `.wasm` modules should be built in CI — never deploy locally-built
+binaries to production.
+
+Recommended pipeline:
+
+1. **Source**: Tag a release in the module repository
+2. **Build**: CI builds the module in a reproducible Docker environment
+3. **Verify**: CI checks binary size, runs clippy, cargo audit, and VTC tests
+4. **Sign**: Attach SHA256 checksums to the GitHub release
+5. **Deploy**: Pull verified `.wasm` from the release (not from arbitrary sources)
+
+### SBOM (Software Bill of Materials)
+
+Generate an SBOM for each module to track dependencies:
+
+```bash
+# Using cargo-sbom (install: cargo install cargo-sbom)
+cd examples/edge-security-filter
+cargo sbom --output-format spdx_json_2_3 > sbom.spdx.json
+```
+
+Include the SBOM in release artifacts for vulnerability tracking.
+
+### Dependency Auditing
+
+Run `cargo audit` regularly to detect known vulnerabilities:
+
+```bash
+cd examples
+cargo audit
+```
+
+CI should fail if any advisory affects a production dependency.
+
+### Binary Size Monitoring
+
+Large binaries may indicate inclusion of unexpected code or debug info:
+
+| Module Type | Expected Size | Alert Threshold |
+|-------------|---------------|-----------------|
+| Simple filter | 50-100 KiB | > 200 KiB |
+| Security filter with serde | 150-300 KiB | > 500 KiB |
+| Complex transform | 200-400 KiB | > 500 KiB |
+
+### Edge Security Filter Threat Model
+
+The `edge-security-filter` module handles untrusted input:
+
+| Threat | Mitigation |
+|--------|-----------|
+| Malformed User-Agent (injection) | Case-insensitive substring match only; no regex evaluation |
+| Rate limit bypass (IP spoofing) | Relies on trusted `X-Forwarded-For` from upstream load balancer |
+| Shared data exhaustion | Time-bucketed keys; old buckets naturally expire |
+| Auth service DoS | HTTP call limit + timeout; circuit breaker in http_pool |
+| Config injection | JSON parser with strict schema; unknown fields ignored |
+| Integer overflow in counters | u64 counters; overflow at 2^64 is not reachable |
