@@ -41,10 +41,31 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Build release artifacts
+        run: |
+          docker build -t vmod-wasm-release .
+          # Extract .wasm modules
+          docker run --rm vmod-wasm-release tar -cf - \
+            tests/wasm/edge_security_filter.wasm \
+            tests/wasm/proxy_wasm_filter.wasm \
+            tests/wasm/passthrough.wasm \
+            tests/wasm/test_module.wasm \
+            | tar -xf -
+          # Extract compiled VMOD (.so) for Varnish 9 / Linux amd64
+          docker run --rm vmod-wasm-release sh -c \
+            'find /src/.libs -name "libvmod_wasm.so" | head -1 | xargs cat' \
+            > libvmod_wasm.so
+          # Package artifacts
+          mkdir -p dist
+          cp tests/wasm/*.wasm dist/
+          cp libvmod_wasm.so "dist/libvmod_wasm-${{ steps.version.outputs.version }}-varnish9-linux-amd64.so"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
-            --notes "${{ steps.changelog.outputs.notes }}"
+            --notes "${{ steps.changelog.outputs.notes }}" \
+            dist/*.wasm \
+            dist/*.so
