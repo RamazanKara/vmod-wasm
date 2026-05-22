@@ -9,8 +9,64 @@ permissions:
   contents: write
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build release image
+        run: |
+          docker buildx build \
+            --platform linux/${{ matrix.arch }} \
+            --load \
+            -t vmod-wasm-release-${{ matrix.arch }} .
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract artifacts
+        run: |
+          mkdir -p dist
+          # Extract compiled VMOD (.so)
+          docker run --rm --platform linux/${{ matrix.arch }} \
+            vmod-wasm-release-${{ matrix.arch }} sh -c \
+            'cat /src/.libs/libvmod_wasm.so' \
+            > "dist/libvmod_wasm-${{ steps.version.outputs.version }}-varnish9-linux-${{ matrix.arch }}.so"
+          # Extract .wasm modules (architecture-independent, only needed once)
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            docker run --rm --platform linux/${{ matrix.arch }} \
+              vmod-wasm-release-${{ matrix.arch }} tar -cf - \
+              tests/wasm/edge_security_filter.wasm \
+              tests/wasm/proxy_wasm_filter.wasm \
+              tests/wasm/passthrough.wasm \
+              tests/wasm/test_module.wasm \
+              | tar -xf -
+            cp tests/wasm/*.wasm dist/
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: dist/
+
   release:
     runs-on: ubuntu-latest
+    needs: build
 
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +80,6 @@ jobs:
       - name: Extract changelog section
         id: changelog
         run: |
-          # Extract the section for this version from CHANGELOG.md
           version="${{ steps.version.outputs.version }}"
           notes=$(awk -v ver="$version" '
             /^## \[/ {
@@ -34,31 +89,17 @@ jobs:
             }
             found { print }
           ' CHANGELOG.md)
-          # Use delimiter for multiline output
           {
             echo "notes<<EOF"
             echo "$notes"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build release artifacts
-        run: |
-          docker build -t vmod-wasm-release .
-          # Extract .wasm modules
-          docker run --rm vmod-wasm-release tar -cf - \
-            tests/wasm/edge_security_filter.wasm \
-            tests/wasm/proxy_wasm_filter.wasm \
-            tests/wasm/passthrough.wasm \
-            tests/wasm/test_module.wasm \
-            | tar -xf -
-          # Extract compiled VMOD (.so) for Varnish 9 / Linux amd64
-          docker run --rm vmod-wasm-release sh -c \
-            'find /src/.libs -name "libvmod_wasm.so" | head -1 | xargs cat' \
-            > libvmod_wasm.so
-          # Package artifacts
-          mkdir -p dist
-          cp tests/wasm/*.wasm dist/
-          cp libvmod_wasm.so "dist/libvmod_wasm-${{ steps.version.outputs.version }}-varnish9-linux-amd64.so"
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Create GitHub Release
         env:
@@ -67,5 +108,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --notes "${{ steps.changelog.outputs.notes }}" \
-            dist/*.wasm \
-            dist/*.so
+            dist/*
