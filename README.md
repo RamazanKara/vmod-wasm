@@ -85,71 +85,14 @@ sub vcl_deliver {
 | `wasm.get_metrics_json()` | Return Proxy-Wasm metrics as JSON |
 | `wasm.get_stats_json()` | Return execution statistics as JSON |
 
-## Host Functions
-
-**`env` namespace** (for non-proxy-wasm modules):
-
-`get_request_header`, `get_request_url`, `get_request_method`, `get_client_ip`, `set_response_header`, `log_msg`
-
-**`wasi_snapshot_preview1` namespace** (WASI stubs for wasm32-wasi modules):
-
-`fd_write`, `clock_time_get`, `random_get`, `environ_sizes_get`, `environ_get`, `args_sizes_get`, `args_get`, `proc_exit`
-
-For the full Proxy-Wasm ABI compatibility matrix, see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
-
 ## Writing Wasm Modules
 
-### Rust (wasm32-unknown-unknown)
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for a complete guide and the
+[`examples/`](examples/) directory for working modules including the
+[edge-security-filter](examples/edge-security-filter/).
 
-```rust
-extern "C" {
-    fn get_request_header(name_ptr: *const u8, name_len: i32,
-                          buf_ptr: *mut u8, buf_len: i32) -> i32;
-}
-
-#[no_mangle]
-pub extern "C" fn on_request() -> i32 {
-    // Return 0 to allow, 403 to block
-    0
-}
-```
-
-### Proxy-Wasm SDK (Rust)
-
-```rust
-use proxy_wasm::traits::*;
-use proxy_wasm::types::*;
-
-proxy_wasm::main! {{
-    proxy_wasm::set_http_context(|_, _| -> Box<dyn HttpContext> {
-        Box::new(MyFilter)
-    });
-}}
-
-struct MyFilter;
-impl HttpContext for MyFilter {
-    fn on_http_request_headers(&mut self, _: usize, _: bool) -> Action {
-        if self.get_http_request_header("x-block").is_some() {
-            self.send_http_response(403, vec![], Some(b"Blocked"));
-            return Action::Pause;
-        }
-        Action::Continue
-    }
-}
-impl Context for MyFilter {}
-```
-
-See [`examples/`](examples/) for complete examples, including the
-[edge-security-filter](examples/edge-security-filter/) — a production-grade
-module demonstrating rate limiting, bot detection, HTTP callouts, and metrics.
-
-## Getting Started
-
-New to vmod-wasm? Start here:
-
-1. [Development Guide](docs/DEVELOPMENT.md) — Write, build, test, and deploy your first Proxy-Wasm module
-2. [Configuration Reference](docs/CONFIGURATION.md) — All VCL functions and recommended settings
-3. [Architecture](docs/ARCHITECTURE.md) — How vmod-wasm works internally
+For host function signatures and Proxy-Wasm ABI coverage, see
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Building
 
@@ -176,16 +119,11 @@ docker build -t vmod-wasm-dev .
 docker run --rm vmod-wasm-dev make check
 ```
 
-## Architecture
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the up-to-date component
-diagram and request lifecycle.
-
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) — Detailed component design and request lifecycle
-- [Development Guide](docs/DEVELOPMENT.md) — Writing your first Proxy-Wasm module
+- [Development Guide](docs/DEVELOPMENT.md) — Writing, building, and testing Proxy-Wasm modules
 - [Configuration Reference](docs/CONFIGURATION.md) — All VCL functions with parameters
+- [Architecture](docs/ARCHITECTURE.md) — Component design and request lifecycle
 - [Proxy-Wasm Compatibility](docs/COMPATIBILITY.md) — ABI coverage matrix
 - [Security Model](docs/SECURITY.md) — Isolation, threat model, supply chain security
 - [Production Guide](docs/PRODUCTION.md) — Deployment, hot-reload, monitoring, capacity planning
