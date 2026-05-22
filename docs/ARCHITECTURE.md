@@ -88,8 +88,12 @@ vcl_recv
             ├─▶ proxy_on_request_headers(ctx_id, num_headers, end_of_stream)
             │    ├─▶ [module calls proxy_get_header_map_value]
             │    ├─▶ [module calls proxy_set_shared_data]
-            │    ├─▶ [module calls proxy_http_call] ──▶ http_pool.c
+            │    ├─▶ [module calls proxy_http_call] ──▶ proxy_wasm_http.c
+            │    │    └─▶ synchronous TCP call; stores response in proxy_ctx
             │    └─▶ returns Action (Continue | Pause)
+            ├─▶ [if http_call_pending] ─▶ proxy_on_http_call_response(ctx_id, ...)
+            │    └─▶ invoked AFTER on_http_request_headers returns
+            │         (deferred to avoid proxy-wasm SDK RefCell re-entrancy)
             ├─▶ proxy_on_request_body(ctx_id, body_size, end_of_stream)
             └─▶ proxy_on_context_finalize(ctx_id)
        └─▶ store_pool: return instance
@@ -127,6 +131,29 @@ Proxy-Wasm HTTP callouts (`proxy_http_call`) reuse connections via an internal p
 - Connection reuse within a configurable window
 - Circuit breaker: after N consecutive failures, short-circuit for cooldown period
 - SSRF prevention: upstream allowlist + IP rebinding checks after DNS resolution
+
+### Deferred HTTP Callout Callback
+
+The proxy-wasm Rust SDK uses `RefCell` to manage the active context.
+Calling `proxy_on_http_call_response` from _within_ `proxy_on_http_request_headers`
+would cause a second mutable borrow of that `RefCell` — a runtime panic.
+
+vmod-wasm avoids this by making `proxy_http_call` synchronous (blocking the thread
+until the upstream responds) and deferring `proxy_on_http_call_response` until
+_after_ `proxy_on_http_request_headers` has returned and released its borrow:
+
+```
+proxy_on_request_headers()   ← RefCell borrowed here
+  └─▶ proxy_http_call()      ← TCP call blocks; response stored in proxy_ctx
+  └─▶ returns Action::Pause  ← RefCell released
+
+[host sees http_call_pending = true]
+proxy_on_http_call_response() ← called now, RefCell is free
+  └─▶ sends 401 / sets Action::Continue
+```
+
+This matches the expected proxy-wasm programming model: the module pauses the
+request in `on_http_request_headers` and the runtime calls back with the result.
 
 ### VDP Integration
 

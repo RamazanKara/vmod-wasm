@@ -155,7 +155,78 @@ All functions from the [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spe
 | `get_property` | Connection/request metadata |
 | `log` | Emit a log message (maps to VSL) |
 
-## Configuration
+## HTTP Callouts
+
+Use `dispatch_http_call` to call an upstream service during request processing.
+The proxy-wasm SDK requires the module to **pause** the request and handle the
+response in `on_http_call_response`.
+
+vmod-wasm makes the callout synchronous (blocks the Varnish thread until the
+upstream responds) and then invokes `on_http_call_response` _after_
+`on_http_request_headers` returns — avoiding the SDK's `RefCell` re-entrancy panic.
+
+```rust
+use proxy_wasm::traits::*;
+use proxy_wasm::types::*;
+
+struct MyFilter {
+    awaiting_auth: bool,
+}
+
+impl Context for MyFilter {
+    fn on_http_call_response(
+        &mut self,
+        _token_id: u32,
+        _num_headers: usize,
+        _body_size: usize,
+        _num_trailers: usize,
+    ) {
+        let status = self
+            .get_http_call_response_header(":status")
+            .unwrap_or_default();
+        if status == "200" {
+            self.resume_http_request();
+        } else {
+            self.send_http_response(401, vec![], Some(b"Unauthorized"));
+        }
+        self.awaiting_auth = false;
+    }
+}
+
+impl HttpContext for MyFilter {
+    fn on_http_request_headers(&mut self, _num_headers: usize, _end_of_stream: bool) -> Action {
+        if let Some(token) = self.get_http_request_header("authorization") {
+            self.dispatch_http_call(
+                "auth-backend",          // upstream name in VCL backend config
+                vec![
+                    (":method", "GET"),
+                    (":path", "/validate"),
+                    (":authority", "auth.internal"),
+                    ("authorization", &token),
+                ],
+                None,
+                vec![],
+                Duration::from_secs(5),
+            )
+            .ok();
+            self.awaiting_auth = true;
+            return Action::Pause;        // resume happens in on_http_call_response
+        }
+        Action::Continue
+    }
+}
+```
+
+**VCL configuration** — always set the allowlist:
+
+```vcl
+sub vcl_init {
+    wasm.load("my_filter", "/etc/varnish/wasm/my_filter.wasm");
+    wasm.set_allowed_upstreams("auth.internal:8080");
+    wasm.set_http_call_limit(3);
+    wasm.set_http_timeout(5000);
+}
+```
 
 Modules can receive JSON configuration via two mechanisms:
 

@@ -40,7 +40,7 @@ This document tracks the implementation status of the
 ### HTTP Calls
 | Function | Status | Notes |
 |----------|--------|-------|
-| `proxy_http_call` | ✅ Implemented | With allowlist, rate limit, and callback |
+| `proxy_http_call` | ✅ Implemented | Synchronous TCP call with allowlist, rate limit, and SSRF protection |
 
 ### Shared Data
 | Function | Status | Notes |
@@ -114,7 +114,7 @@ This document tracks the implementation status of the
 | `proxy_on_response_body` | ✅ VDP | Streaming via VDP: each chunk passed immediately with end_of_stream flag; no buffering |
 | `proxy_on_log` | ✅ Called | In lifecycle step 7 |
 | `proxy_on_done` | ✅ Called | In lifecycle step 8 |
-| `proxy_on_http_call_response` | ✅ Called | After HTTP callout completes |
+| `proxy_on_http_call_response` | ✅ Called | Deferred: invoked after `on_http_request_headers` returns to avoid proxy-wasm SDK `RefCell` re-entrancy |
 
 ## Properties
 
@@ -147,10 +147,12 @@ Response maps include:
 
 ## Limitations
 
-1. **Synchronous HTTP calls**: `proxy_http_call` blocks the request thread
-   until the upstream responds or times out.  Timeout is configurable via
-   `wasm.set_http_timeout(ms)` (default 5s, max 30s).  The module-supplied
-   timeout takes priority if non-zero.
+1. **Synchronous HTTP calls**: `proxy_http_call` blocks the Varnish worker thread
+   until the upstream responds or times out.
+   `proxy_on_http_call_response` is then invoked immediately after
+   `on_http_request_headers` returns (deferred callback pattern).
+   Timeout is configurable via `wasm.set_http_timeout(ms)` (default 5 s, max 30 s).
+   The module-supplied timeout takes priority if non-zero.
 
 2. **Anti-IP-rebinding**: HTTP calls reject resolved private/internal IPs
    (RFC1918, RFC5735, RFC4193, loopback) to prevent SSRF.

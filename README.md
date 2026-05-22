@@ -5,7 +5,7 @@ A Varnish VMOD that executes WebAssembly modules for HTTP request processing at 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
 [![CI](https://github.com/RamazanKara/vmod-wasm/actions/workflows/ci.yml/badge.svg)](https://github.com/RamazanKara/vmod-wasm/actions)
 ![Wasmtime](https://img.shields.io/badge/Wasmtime-v44.0.0-blue)
-![Varnish](https://img.shields.io/badge/Varnish-8.0%2B-purple)
+![Varnish](https://img.shields.io/badge/Varnish-9.0%2B-purple)
 ![Proxy-Wasm ABI](https://img.shields.io/badge/Proxy--Wasm%20ABI-v0.2.1-green)
 
 
@@ -20,6 +20,7 @@ Includes a full [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) impl
 - Load `.wasm` modules at VCL init time
 - Call exported Wasm functions from VCL
 - Full Proxy-Wasm ABI v0.2.1 (header maps, trailers, buffers, HTTP callouts, properties, shared data, metrics, tick timer, stream control)
+- Deferred `proxy_on_http_call_response` callback — invoked after `on_http_request_headers` returns (avoids proxy-wasm SDK re-entrancy)
 - WASI support (`fd_write`, `clock_time_get`, `random_get` with real implementations)
 - Epoch-based execution time limits (low-overhead, no per-instruction cost)
 - Memory limits (default 16 MiB)
