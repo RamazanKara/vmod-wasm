@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT([vmod-wasm], [3.1.0], [https://github.com/RamazanKara/vmod-wasm/issues])
+AC_INIT([vmod-wasm], [4.3.0], [https://github.com/RamazanKara/vmod-wasm/issues])
 AC_CONFIG_SRCDIR([src/vmod_wasm.vcc])
 AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_HEADERS([config.h])
@@ -18,7 +18,7 @@ AC_PROG_INSTALL
 PKG_PROG_PKG_CONFIG
 
 # Find Varnish
-PKG_CHECK_MODULES([VARNISHAPI], [varnishapi >= 8.0])
+PKG_CHECK_MODULES([VARNISHAPI], [varnishapi >= 9.0])
 
 # Find vmodtool.py
 AC_ARG_VAR([VMODTOOL], [path to vmodtool.py])

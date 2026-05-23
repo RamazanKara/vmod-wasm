@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  WASMTIME_VERSION: 44.0.0
+  VARNISH_VERSION: 9.0.3
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -38,25 +42,84 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Extract artifacts
+      - name: Package binary artifact
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p dist
-          # Extract compiled VMOD (.so)
           docker run --rm --platform linux/${{ matrix.arch }} \
-            vmod-wasm-release-${{ matrix.arch }} sh -c \
-            'cat /src/src/.libs/libvmod_wasm.so' \
-            > "dist/libvmod_wasm-${{ steps.version.outputs.version }}-varnish9-linux-${{ matrix.arch }}.so"
-          # Extract .wasm modules (architecture-independent, only needed once)
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            docker run --rm --platform linux/${{ matrix.arch }} \
-              vmod-wasm-release-${{ matrix.arch }} tar -cf - \
-              tests/wasm/edge_security_filter.wasm \
-              tests/wasm/proxy_wasm_filter.wasm \
-              tests/wasm/passthrough.wasm \
-              tests/wasm/test_module.wasm \
-              | tar -xf -
-            cp tests/wasm/*.wasm dist/
-          fi
+            -e VERSION="$VERSION" \
+            -e ARCH="$ARCH" \
+            -e WASMTIME_VERSION="${{ env.WASMTIME_VERSION }}" \
+            -e VARNISH_VERSION="${{ env.VARNISH_VERSION }}" \
+            -v "$PWD/dist:/dist" \
+            vmod-wasm-release-${{ matrix.arch }} sh -ceu '
+              pkg="/tmp/vmod-wasm-${VERSION}-varnish9-linux-${ARCH}"
+              mkdir -p "$pkg/lib" "$pkg/licenses"
+              cp /src/src/.libs/libvmod_wasm.so "$pkg/lib/"
+              cp -a /opt/wasmtime/lib/libwasmtime.so* "$pkg/lib/"
+              cp /src/LICENSE "$pkg/licenses/vmod-wasm-LICENSE"
+              cp /src/THIRD_PARTY_NOTICES.md "$pkg/licenses/"
+              cat > "$pkg/INSTALL.md" <<EOF
+          # vmod-wasm ${VERSION} for Varnish 9 on linux/${ARCH}
+
+          This bundle contains libvmod_wasm.so and the Wasmtime ${WASMTIME_VERSION}
+          runtime library it was built against.
+
+          Install both shared libraries into your VMOD/runtime library location or
+          keep this bundle together and expose the lib directory to varnishd:
+
+              export LD_LIBRARY_PATH=/path/to/vmod-wasm-${VERSION}-varnish9-linux-${ARCH}/lib:\$LD_LIBRARY_PATH
+
+          The VMOD is built and tested against Varnish ${VARNISH_VERSION}. Source
+          builds remain the authoritative path for custom Varnish installations.
+          EOF
+              tar -czf "/dist/vmod-wasm-${VERSION}-varnish9-linux-${ARCH}.tar.gz" \
+                -C /tmp "vmod-wasm-${VERSION}-varnish9-linux-${ARCH}"
+              {
+                echo "arch=${ARCH}"
+                echo "varnish_version=$(/usr/sbin/varnishd -V 2>&1 | head -n1)"
+                echo "wasmtime_version=${WASMTIME_VERSION}"
+                echo "rust_version=$(rustc --version)"
+              } > "/dist/metadata-linux-${ARCH}.env"
+            '
+
+      - name: Package source and example Wasm artifacts
+        if: matrix.arch == 'amd64'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker run --rm --platform linux/${{ matrix.arch }} \
+            -e VERSION="$VERSION" \
+            -v "$PWD/dist:/dist" \
+            vmod-wasm-release-${{ matrix.arch }} sh -ceu '
+              make dist
+              cp "vmod-wasm-${VERSION}.tar.gz" "/dist/vmod-wasm-${VERSION}-src.tar.gz"
+              tmp="/tmp/vmod-wasm-${VERSION}-examples-wasm"
+              mkdir -p "$tmp"
+              cp /src/tests/wasm/*.wasm "$tmp/"
+              cp /src/examples/edge-security-filter/config.json "$tmp/edge-security-filter-config.json"
+              tar -czf "/dist/vmod-wasm-${VERSION}-examples-wasm.tar.gz" \
+                -C /tmp "vmod-wasm-${VERSION}-examples-wasm"
+            '
+
+      - name: Smoke test binary bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker run --rm --platform linux/${{ matrix.arch }} \
+            -e VERSION="$VERSION" \
+            -e ARCH="$ARCH" \
+            -v "$PWD/dist:/dist" \
+            varnish:${{ env.VARNISH_VERSION }} sh -ceu '
+              mkdir -p /tmp/pkg
+              tar -xzf "/dist/vmod-wasm-${VERSION}-varnish9-linux-${ARCH}.tar.gz" -C /tmp/pkg
+              pkg=$(find /tmp/pkg -maxdepth 1 -type d -name "vmod-wasm-*" | head -n1)
+              LD_LIBRARY_PATH="$pkg/lib" ldd "$pkg/lib/libvmod_wasm.so" | tee /tmp/ldd.txt
+              grep "libwasmtime.so.*=>.*$pkg/lib" /tmp/ldd.txt
+            '
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -101,6 +164,51 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Build manifest and checksums
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p release-dist
+          cp dist/*.tar.gz release-dist/
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+
+          version = os.environ["VERSION"]
+          metadata = {}
+          for path in sorted(glob.glob("dist/metadata-linux-*.env")):
+              entry = {}
+              with open(path, encoding="utf-8") as fh:
+                  for line in fh:
+                      key, _, value = line.strip().partition("=")
+                      if key:
+                          entry[key] = value
+              if "arch" in entry:
+                  metadata[entry["arch"]] = entry
+
+          manifest = {
+              "name": "vmod-wasm",
+              "version": version,
+              "git_sha": os.environ["GITHUB_SHA"],
+              "support": {
+                  "varnish": "9.x",
+                  "wasmtime": "44.0.0",
+                  "platforms": ["linux/amd64", "linux/arm64"],
+              },
+              "builds": metadata,
+              "artifacts": sorted(
+                  os.path.basename(path)
+                  for path in glob.glob("release-dist/*.tar.gz")
+              ),
+          }
+          with open(f"release-dist/manifest-{version}.json", "w", encoding="utf-8") as fh:
+              json.dump(manifest, fh, indent=2)
+              fh.write("\n")
+          PY
+          cd release-dist
+          sha256sum *.tar.gz "manifest-${VERSION}.json" > SHA256SUMS
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -108,4 +216,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --notes "${{ steps.changelog.outputs.notes }}" \
-            dist/*
+            release-dist/*

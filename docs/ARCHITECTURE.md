@@ -53,7 +53,7 @@ vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) WebAssembly runtime into 
 │  ┌──────────────────┐  ┌──────────────────┐                       │
 │  │   vdp_wasm.c     │  │   http_pool.c    │                       │
 │  │ • VDP filter     │  │ • Connection     │                       │
-│  │ • Response body  │  │   pool (curl)    │                       │
+│  │ • Response body  │  │   pool (TCP)     │                       │
 │  │   streaming      │  │ • Circuit breaker│                       │
 │  └──────────────────┘  └──────────────────┘                       │
 │                                                                     │
@@ -127,7 +127,7 @@ Unlike fuel-based metering (which adds per-instruction overhead), epoch interrup
 
 Proxy-Wasm HTTP callouts (`proxy_http_call`) reuse connections via an internal pool:
 
-- libcurl multi-handle per Varnish thread
+- Blocking TCP sockets per Varnish worker thread
 - Connection reuse within a configurable window
 - Circuit breaker: after N consecutive failures, short-circuit for cooldown period
 - SSRF prevention: upstream allowlist + IP rebinding checks after DNS resolution
@@ -169,7 +169,7 @@ Response body streaming uses Varnish Delivery Processors (VDP):
 - **Store pool**: lock-free checkout via atomic operations
 - **Shared data**: reader-writer lock (RWLock) per hash bucket
 - **Metrics**: atomic u64 counters; RWLock for metric definition
-- **HTTP pool**: per-thread curl multi-handle (no cross-thread sharing)
+- **HTTP pool**: per-thread TCP connection state (no cross-thread sharing)
 
 ## File Map
 

@@ -6,6 +6,11 @@ vmod-wasm embeds a WebAssembly runtime (Wasmtime) into Varnish Cache,
 enabling request/response processing via compiled Wasm modules. This
 document covers production deployment considerations.
 
+The stable release support target is Varnish 9.x on Linux `amd64` and `arm64`.
+GitHub binary bundles include the Wasmtime 44.0.0 runtime library used at build
+time. Keep `libvmod_wasm.so` and the bundled `libwasmtime.so` together, or set
+`LD_LIBRARY_PATH` so `varnishd` can resolve `libwasmtime.so` at startup.
+
 ## Resource Limits
 
 ### Epoch Deadline (Execution Time Limit)

@@ -51,7 +51,7 @@ Run the Proxy-Wasm request lifecycle (headers + body).
 |-----------|------|-------------|
 | `module` | STRING | Module name |
 
-**Returns**: STRING ("0" = continue, non-zero = module sent a response)
+**Returns**: INT (0 = continue, positive status = local response, -1 = error)
 
 ### `wasm.proxy_wasm_on_response(module)`
 
@@ -61,7 +61,7 @@ Run the Proxy-Wasm response lifecycle (headers).
 |-----------|------|-------------|
 | `module` | STRING | Module name |
 
-**Returns**: STRING ("0" = continue)
+**Returns**: INT (0 = continue, positive status = local response, -1 = error)
 
 ### `wasm.proxy_wasm_on_request_configured(module, vm_config, plugin_config)`
 
@@ -73,7 +73,7 @@ Run request lifecycle with explicit configuration.
 | `vm_config` | STRING | VM-level configuration (passed to `on_vm_start`) |
 | `plugin_config` | STRING | Plugin configuration (passed to `on_configure`) |
 
-**Returns**: STRING ("0" = continue)
+**Returns**: INT (0 = continue, positive status = local response, -1 = error)
 
 ### `wasm.proxy_wasm_on_response_configured(module, vm_config, plugin_config)`
 
@@ -85,7 +85,7 @@ Run response lifecycle with explicit configuration.
 | `vm_config` | STRING | VM-level configuration |
 | `plugin_config` | STRING | Plugin configuration |
 
-**Returns**: STRING ("0" = continue)
+**Returns**: INT (0 = continue, positive status = local response, -1 = error)
 
 ---
 
@@ -119,6 +119,48 @@ Set maximum linear memory a Wasm module can allocate.
 
 ---
 
+## Pooling And Chains
+
+### `wasm.set_store_pool_size(module, size)`
+
+Pre-warm a fixed number of Wasmtime stores for a loaded module.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `module` | STRING | Module name (from `wasm.load`) |
+| `size` | INT | Number of stores to pre-warm (1-256) |
+
+Call this from `vcl_init` after `wasm.load()`.
+
+### `wasm.set_http_pool_size(size)`
+
+Set the maximum number of persistent HTTP callout connections.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `size` | INT | Maximum pooled HTTP connections |
+
+### `wasm.filter_chain(chain_spec)`
+
+Run a request-side chain of modules separated by `|`.
+
+**Returns**: INT (0 = success, -1 = error)
+
+**Example**:
+```vcl
+if (wasm.filter_chain("rate_limit|auth|transform") != 0) {
+    return (synth(500, "Filter chain error"));
+}
+```
+
+### `wasm.filter_chain_response(chain_spec)`
+
+Run a response-side chain of modules separated by `|`.
+
+**Returns**: INT (0 = success, -1 = error)
+
+---
+
 ## Security
 
 ### `wasm.set_allowed_upstreams(list)`
@@ -143,14 +185,6 @@ Maximum HTTP callouts per request per Wasm execution.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `limit` | INT | 5 | Max callouts (0 = disable callouts entirely) |
-
-### `wasm.set_http_timeout(ms)`
-
-Default timeout for HTTP callouts.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `ms` | INT | 5000 | Timeout in milliseconds |
 
 ### `wasm.set_fail_mode(mode)`
 
@@ -188,6 +222,18 @@ Return internal execution statistics as JSON.
 
 **Returns**: STRING (JSON with pool stats, execution counts, error counts)
 
+### `wasm.get_pool_stats_json(module)`
+
+Return store pool statistics for one module.
+
+**Returns**: STRING (JSON with store pool counters)
+
+### `wasm.get_http_pool_stats_json()`
+
+Return HTTP connection pool statistics.
+
+**Returns**: STRING (JSON with HTTP pool counters)
+
 ---
 
 ## Recommended Production Configuration
@@ -206,7 +252,6 @@ sub vcl_init {
     # Security
     wasm.set_allowed_upstreams("auth.internal:8080");
     wasm.set_http_call_limit(3);
-    wasm.set_http_timeout(5000);
     wasm.set_fail_mode("closed");       # Block on error
 }
 

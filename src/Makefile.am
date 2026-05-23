@@ -39,9 +39,16 @@ nodist_libvmod_wasm_la_SOURCES = \
 	vcc_if.c \
 	vcc_if.h
 
-vcc_if.c vcc_if.h: vmod_wasm.vcc
+vmod_vcs_version.txt:
+	echo "$(PACKAGE_VERSION)" > $@
+
+vcc_if.c vcc_if.h: vmod_wasm.vcc vmod_vcs_version.txt
 	$(VMODTOOL) $(srcdir)/vmod_wasm.vcc
 
 BUILT_SOURCES = vcc_if.c vcc_if.h
-CLEANFILES = $(BUILT_SOURCES)
+CLEANFILES = \
+	$(BUILT_SOURCES) \
+	vmod_vcs_version.txt \
+	vmod_wasm.man.rst \
+	vmod_wasm.rst
 EXTRA_DIST = vmod_wasm.vcc

@@ -6,7 +6,7 @@ Thank you for considering a contribution to vmod-wasm.
 
 - Rust toolchain (stable) with the `wasm32-unknown-unknown` target
 - Docker (for running the full test suite)
-- Varnish 8.0+ development headers (for native builds)
+- Varnish 9.x development headers (for native builds)
 
 Install the Rust target:
 
@@ -15,6 +15,13 @@ rustup target add wasm32-unknown-unknown
 ```
 
 ## Development Workflow
+
+For native development, generate and configure the build first:
+
+```shell
+./autogen.sh
+./configure --with-wasmtime=/path/to/wasmtime
+```
 
 1. **Build Wasm modules:**
 
@@ -38,6 +45,12 @@ rustup target add wasm32-unknown-unknown
 
    ```shell
    make fmt
+   ```
+
+5. **Run the full release dry-run before release-impacting changes:**
+
+   ```shell
+   make release-dry-run
    ```
 
 ## Writing a New Wasm Module

@@ -151,8 +151,8 @@ Response maps include:
    until the upstream responds or times out.
    `proxy_on_http_call_response` is then invoked immediately after
    `on_http_request_headers` returns (deferred callback pattern).
-   Timeout is configurable via `wasm.set_http_timeout(ms)` (default 5 s, max 30 s).
-   The module-supplied timeout takes priority if non-zero.
+   The default timeout is 5 seconds with a 30 second cap. The module-supplied
+   timeout takes priority if non-zero.
 
 2. **Anti-IP-rebinding**: HTTP calls reject resolved private/internal IPs
    (RFC1918, RFC5735, RFC4193, loopback) to prevent SSRF.

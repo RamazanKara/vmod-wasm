@@ -53,7 +53,7 @@ sub vcl_init {
 
     # Proxy-Wasm filter
     wasm.load("waf", "/path/to/proxy_wasm_filter.wasm");
-    wasm.set_fuel(1000000);
+    wasm.set_epoch_deadline(100);
     wasm.set_memory_limit(8388608);
 }
 

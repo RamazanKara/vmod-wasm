@@ -2,6 +2,22 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [4.3.0] - 2026-05-23
+
+### Added
+- BSD-2-Clause open-source release metadata and community files
+- Source distribution checks for release readiness
+- GitHub release tarballs with bundled Wasmtime runtime, checksums, and manifest
+
+### Changed
+- Public support target is Varnish 9.x with Wasmtime 44.0.0
+- Version metadata synchronized across Autotools, VMOD runtime, Docker, and docs
+- Documentation updated for epoch deadlines, INT return values, and release bundles
+
+### Fixed
+- `make distcheck` can build Wasm test fixtures from the source archive
+- Release workflow now includes all example `.wasm` artifacts, including `transform.wasm`
+
 ## [4.2.1] - 2026-05-23
 
 ### Changed

@@ -3,7 +3,7 @@ name = "edge-security-filter"
 version = "1.0.0"
 edition = "2021"
 description = "Production-grade edge security and observability filter for vmod-wasm"
-license = "CC-BY-NC-4.0"
+license = "BSD-2-Clause"
 
 [lib]
 crate-type = ["cdylib"]

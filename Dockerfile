@@ -51,8 +51,7 @@ RUN cd examples \
     && cp target/wasm32-unknown-unknown/release/edge_security_filter.wasm /src/tests/wasm/
 
 # Build the VMOD
-RUN echo "3.1.0" > vmod_vcs_version.txt \
-    && chmod +x autogen.sh \
+RUN chmod +x autogen.sh \
     && ./autogen.sh \
     && ./configure --with-wasmtime=${WASMTIME_DIR} \
     && make

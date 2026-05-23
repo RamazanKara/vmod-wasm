@@ -2,7 +2,7 @@
 
 A Varnish VMOD that executes WebAssembly modules for HTTP request processing at the edge.
 
-[![License: CC BY-NC 4.0](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
+[![License: BSD-2-Clause](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 [![CI](https://github.com/RamazanKara/vmod-wasm/actions/workflows/ci.yml/badge.svg)](https://github.com/RamazanKara/vmod-wasm/actions)
 ![Wasmtime](https://img.shields.io/badge/Wasmtime-v44.0.0-blue)
 ![Varnish](https://img.shields.io/badge/Varnish-9.0%2B-purple)
@@ -80,10 +80,15 @@ sub vcl_deliver {
 | `wasm.proxy_wasm_on_response_configured(module, vm, plugin)` | Response lifecycle with config |
 | `wasm.set_allowed_upstreams(list)` | Upstream allowlist (SSRF prevention) |
 | `wasm.set_http_call_limit(limit)` | Max HTTP callouts per request |
-| `wasm.set_http_timeout(ms)` | Default HTTP callout timeout |
 | `wasm.set_fail_mode(mode)` | "closed" or "open" on error |
+| `wasm.set_store_pool_size(module, size)` | Pre-warmed store count for a module |
+| `wasm.set_http_pool_size(size)` | Max persistent HTTP connections |
+| `wasm.filter_chain(chain)` | Run a request-side module chain |
+| `wasm.filter_chain_response(chain)` | Run a response-side module chain |
 | `wasm.get_metrics_json()` | Return Proxy-Wasm metrics as JSON |
 | `wasm.get_stats_json()` | Return execution statistics as JSON |
+| `wasm.get_pool_stats_json(module)` | Return store pool stats for a module |
+| `wasm.get_http_pool_stats_json()` | Return HTTP pool stats |
 
 ## Writing Wasm Modules
 
@@ -98,8 +103,8 @@ For host function signatures and Proxy-Wasm ABI coverage, see
 
 ### Prerequisites
 
-- Varnish Cache 8.0+ (with varnishapi dev headers)
-- Wasmtime C API (libwasmtime)
+- Varnish Cache 9.x (with varnishapi dev headers)
+- Wasmtime C API 44.0.0 (libwasmtime)
 - autotools, pkg-config, C compiler
 
 ### Build
@@ -111,6 +116,13 @@ make
 make check
 make install
 ```
+
+### Release Bundles
+
+GitHub releases publish source and convenience binary bundles for Linux
+`amd64` and `arm64` on Varnish 9. Binary bundles include `libvmod_wasm.so`,
+`libwasmtime.so`, notices, checksums, and an install note. Source builds remain
+the authoritative path for custom Varnish installations.
 
 ### Docker
 
@@ -130,7 +142,7 @@ docker run --rm vmod-wasm-dev make check
 
 ## License
 
-CC BY-NC 4.0 — see [LICENSE](LICENSE).
+BSD-2-Clause — see [LICENSE](LICENSE).
 
 ## Contributing
 

@@ -7,7 +7,7 @@ How to write, build, test, and deploy Proxy-Wasm modules for vmod-wasm.
 - [Rust toolchain](https://rustup.rs/) (stable)
 - `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
 - Docker (for running integration tests)
-- Varnish Cache 8.0+ with `varnish-dev` (optional, for local VTC testing)
+- Varnish Cache 9.x with `varnish-dev` (optional, for local VTC testing)
 
 ## Project Structure
 
@@ -224,7 +224,6 @@ sub vcl_init {
     wasm.load("my_filter", "/etc/varnish/wasm/my_filter.wasm");
     wasm.set_allowed_upstreams("auth.internal:8080");
     wasm.set_http_call_limit(3);
-    wasm.set_http_timeout(5000);
 }
 ```
 

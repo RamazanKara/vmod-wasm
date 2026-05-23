@@ -226,7 +226,7 @@ pub extern "C" fn block_bad_bot() -> i32 {
 
 // --- Phase 3: Execution safety test functions ---
 
-/// Infinite loop — will be stopped by fuel exhaustion.
+/// Infinite loop — will be stopped by epoch deadline interruption.
 /// Should never actually return.
 #[no_mangle]
 pub extern "C" fn infinite_loop() -> i32 {
@@ -254,7 +254,7 @@ pub extern "C" fn grow_memory() -> i32 {
     v.len() as i32
 }
 
-/// A normal computation that uses moderate fuel.
+/// A normal computation that stays below the epoch deadline.
 /// Returns the number of iterations performed.
 #[no_mangle]
 pub extern "C" fn compute_sum() -> i32 {
