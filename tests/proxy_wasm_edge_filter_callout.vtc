@@ -16,6 +16,14 @@ server s3 {
     txresp -status 403 -body "Forbidden"
 } -start
 
+# Auth service mock - response exceeds the callout buffer cap
+server s4 {
+    rxreq
+    expect req.method == "POST"
+    expect req.url == "/validate"
+    txresp -status 200 -nolen -hdr "Content-Length: 262144"
+} -start
+
 # Backend server
 server s1 -repeat 3 {
     rxreq
@@ -32,15 +40,20 @@ varnish v1 -arg "-p thread_pool_stack=262144" -vcl {
 
     sub vcl_init {
         wasm.load("edge", "${edge_filter}");
-        wasm.set_allowed_upstreams("${s2_addr}:${s2_port},${s3_addr}:${s3_port}");
+        wasm.set_allowed_upstreams("${s2_addr}:${s2_port},${s3_addr}:${s3_port},${s4_addr}:${s4_port}");
         wasm.set_http_call_limit(10);
+        wasm.set_http_pool_size(4);
     }
 
     sub vcl_recv {
         set req.backend_hint = be1;
 
-        # Use s3 (returns 403) for requests with X-Use-Bad-Auth header
-        if (req.http.X-Use-Bad-Auth) {
+        # Use s4 (oversized response) for requests with X-Use-Large-Auth header
+        if (req.http.X-Use-Large-Auth) {
+            set req.http.X-Wasm-Result =
+                wasm.proxy_wasm_on_request_configured("edge", "",
+                    {"{"auth_service":"${s4_addr}:${s4_port}","enrich_headers":false,"bot_patterns":[],"blocked_countries":[],"rate_limit":{"requests_per_second":100,"window_seconds":60}}"});
+        } else if (req.http.X-Use-Bad-Auth) {
             set req.http.X-Wasm-Result =
                 wasm.proxy_wasm_on_request_configured("edge", "",
                     {"{"auth_service":"${s3_addr}:${s3_port}","enrich_headers":false,"bot_patterns":[],"blocked_countries":[],"rate_limit":{"requests_per_second":100,"window_seconds":60}}"});
@@ -87,4 +100,11 @@ client c3 {
     rxresp
     expect resp.status == 200
     expect resp.body == "Backend OK"
+} -run
+
+# Test 4: Oversized auth response fails closed
+client c4 {
+    txreq -url "/api/data" -hdr "Authorization: Bearer valid-token" -hdr "X-Use-Large-Auth: 1"
+    rxresp
+    expect resp.status == 503
 } -run

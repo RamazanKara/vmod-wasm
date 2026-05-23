@@ -10,7 +10,10 @@
 #include "config.h"
 #endif
 
+#include <limits.h>
+#include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -50,80 +53,313 @@ VRBT_GENERATE(vwasm_http_call_tree, vwasm_http_call_entry, entry,
 
 #define PW_HTTP_MAX_RESPONSE	(256 * 1024)  /* 256 KiB max response */
 
-/* ----------------------------------------------------------------
- * Anti-IP-rebinding: reject connections to private/internal IPs.
- *
- * Prevents SSRF via DNS rebinding by validating resolved addresses
- * against RFC1918, RFC5735, RFC4193, and loopback ranges.
- * ---------------------------------------------------------------- */
 static int
-pw_is_private_addr(const struct sockaddr *sa)
+pw_http_is_token_char(unsigned char c)
 {
-	if (sa->sa_family == AF_INET) {
-		const struct sockaddr_in *sin;
-		uint32_t ip;
+	if (c >= '0' && c <= '9')
+		return (1);
+	if (c >= 'A' && c <= 'Z')
+		return (1);
+	if (c >= 'a' && c <= 'z')
+		return (1);
+	switch (c) {
+	case '!':
+	case '#':
+	case '$':
+	case '%':
+	case '&':
+	case '\'':
+	case '*':
+	case '+':
+	case '-':
+	case '.':
+	case '^':
+	case '_':
+	case '`':
+	case '|':
+	case '~':
+		return (1);
+	default:
+		return (0);
+	}
+}
 
-		sin = (const struct sockaddr_in *)sa;
-		ip = ntohl(sin->sin_addr.s_addr);
+static int
+pw_http_has_line_ctl(const char *s, size_t len)
+{
+	size_t i;
 
-		/* 127.0.0.0/8 — loopback */
-		if ((ip >> 24) == 127)
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)s[i];
+		if (c == '\0' || c == '\r' || c == '\n')
 			return (1);
-		/* 10.0.0.0/8 — RFC1918 */
-		if ((ip >> 24) == 10)
-			return (1);
-		/* 172.16.0.0/12 — RFC1918 */
-		if ((ip >> 20) == (172 << 4 | 1))
-			return (1);
-		/* 192.168.0.0/16 — RFC1918 */
-		if ((ip >> 16) == ((192 << 8) | 168))
-			return (1);
-		/* 169.254.0.0/16 — link-local */
-		if ((ip >> 16) == ((169 << 8) | 254))
-			return (1);
-		/* 0.0.0.0/8 — "this" network */
-		if ((ip >> 24) == 0)
-			return (1);
-		/* 100.64.0.0/10 — shared address space (CGN) */
-		if ((ip >> 22) == (100 << 2 | 1))
-			return (1);
-		/* 192.0.0.0/24 — IETF protocol assignments */
-		if ((ip >> 8) == ((192 << 16) | 0))
-			return (1);
-		/* 198.18.0.0/15 — benchmarking */
-		if ((ip >> 17) == ((198 << 7) | 9))
-			return (1);
-		/* 240.0.0.0/4 — reserved (includes broadcast) */
-		if ((ip >> 28) == 15)
-			return (1);
-	} else if (sa->sa_family == AF_INET6) {
-		const struct sockaddr_in6 *sin6;
-		const uint8_t *b;
+	}
+	return (0);
+}
 
-		sin6 = (const struct sockaddr_in6 *)sa;
-		b = sin6->sin6_addr.s6_addr;
+static int
+pw_http_host_ok(const char *s, size_t len)
+{
+	size_t i;
 
-		/* ::1/128 — loopback */
-		if (memcmp(b, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\1", 16) == 0)
-			return (1);
-		/* ::/128 — unspecified */
-		if (memcmp(b, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 16) == 0)
-			return (1);
-		/* fc00::/7 — unique local (RFC4193) */
-		if ((b[0] & 0xfe) == 0xfc)
-			return (1);
-		/* fe80::/10 — link-local */
-		if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80)
-			return (1);
-		/* ::ffff:0:0/96 — IPv4-mapped, check inner IPv4 */
-		if (memcmp(b, "\0\0\0\0\0\0\0\0\0\0\xff\xff", 12) == 0) {
-			struct sockaddr_in inner;
-			memset(&inner, 0, sizeof(inner));
-			inner.sin_family = AF_INET;
-			memcpy(&inner.sin_addr.s_addr, b + 12, 4);
-			return (pw_is_private_addr(
-			    (const struct sockaddr *)&inner));
+	if (len == 0)
+		return (0);
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)s[i];
+		if (c <= ' ' || c >= 0x7f || c == '/')
+			return (0);
+	}
+	return (1);
+}
+
+static int
+pw_http_method_ok(const char *s, size_t len)
+{
+	size_t i;
+
+	if (len == 0)
+		return (0);
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)s[i];
+		if (!pw_http_is_token_char(c))
+			return (0);
+	}
+	return (1);
+}
+
+static int
+pw_http_path_ok(const char *s, size_t len)
+{
+	size_t i;
+
+	if (len == 0)
+		return (0);
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)s[i];
+		if (c <= ' ' || c >= 0x7f)
+			return (0);
+	}
+	return (1);
+}
+
+static int
+pw_http_header_name_ok(const char *s, size_t len)
+{
+	size_t i;
+
+	if (len == 0)
+		return (0);
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)s[i];
+		if (!pw_http_is_token_char(c))
+			return (0);
+	}
+	return (1);
+}
+
+static int
+pw_http_header_value_ok(const char *s, size_t len)
+{
+	size_t i;
+
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)s[i];
+		if (c == '\0' || c == '\r' || c == '\n' || c == 0x7f)
+			return (0);
+		if (c < ' ' && c != '\t')
+			return (0);
+	}
+	return (1);
+}
+
+static int
+pw_http_append_header(char *dst, size_t dst_sz, size_t *dst_len,
+    const char *key, size_t key_len, const char *value, size_t value_len)
+{
+	size_t avail;
+	int written;
+
+	if (!pw_http_header_name_ok(key, key_len) ||
+	    !pw_http_header_value_ok(value, value_len))
+		return (-1);
+	if (key_len > INT_MAX || value_len > INT_MAX)
+		return (-1);
+	if (*dst_len >= dst_sz)
+		return (-1);
+
+	avail = dst_sz - *dst_len;
+	written = snprintf(dst + *dst_len, avail, "%.*s: %.*s\r\n",
+	    (int)key_len, key, (int)value_len, value);
+	if (written < 0 || (size_t)written >= avail)
+		return (-1);
+
+	*dst_len += (size_t)written;
+	return (0);
+}
+
+static int
+pw_http_parse_size(const char *s, size_t len, size_t *out)
+{
+	size_t value = 0;
+	size_t i = 0;
+	int digits = 0;
+
+	while (i < len && (s[i] == ' ' || s[i] == '\t'))
+		i++;
+	for (; i < len; i++) {
+		unsigned char c = (unsigned char)s[i];
+
+		if (c == ' ' || c == '\t') {
+			while (i < len && (s[i] == ' ' || s[i] == '\t'))
+				i++;
+			if (i != len)
+				return (-1);
+			break;
 		}
+		if (c < '0' || c > '9')
+			return (-1);
+		if (value > (SIZE_MAX - (size_t)(c - '0')) / 10)
+			return (-1);
+		value = value * 10 + (size_t)(c - '0');
+		digits = 1;
+	}
+	if (!digits)
+		return (-1);
+	*out = value;
+	return (0);
+}
+
+static int
+pw_http_find_header_value(const char *headers, size_t headers_len,
+    const char *name, const char **value, size_t *value_len)
+{
+	const char *p, *end, *line_end;
+	size_t name_len;
+
+	name_len = strlen(name);
+	p = headers;
+	end = headers + headers_len;
+
+	/* Skip status line. */
+	line_end = strstr(p, "\r\n");
+	if (line_end == NULL || line_end > end)
+		return (0);
+	p = line_end + 2;
+
+	while (p < end) {
+		const char *colon;
+		const char *v;
+		const char *vend;
+		size_t line_len;
+
+		line_end = strstr(p, "\r\n");
+		if (line_end == NULL || line_end > end)
+			break;
+		if (line_end == p)
+			break;
+
+		line_len = (size_t)(line_end - p);
+		colon = memchr(p, ':', line_len);
+		if (colon != NULL && (size_t)(colon - p) == name_len &&
+		    strncasecmp(p, name, name_len) == 0) {
+			v = colon + 1;
+			while (v < line_end && (*v == ' ' || *v == '\t'))
+				v++;
+			vend = line_end;
+			while (vend > v &&
+			    (vend[-1] == ' ' || vend[-1] == '\t'))
+				vend--;
+			*value = v;
+			*value_len = (size_t)(vend - v);
+			return (1);
+		}
+		p = line_end + 2;
+	}
+	return (0);
+}
+
+static int
+pw_http_value_has_token(const char *value, size_t value_len,
+    const char *token)
+{
+	size_t token_len;
+	size_t i = 0;
+
+	token_len = strlen(token);
+	while (i < value_len) {
+		const char *start;
+		const char *end;
+		size_t len;
+
+		while (i < value_len &&
+		    (value[i] == ' ' || value[i] == '\t' ||
+		     value[i] == ','))
+			i++;
+		start = value + i;
+		while (i < value_len && value[i] != ',')
+			i++;
+		end = value + i;
+		while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
+			end--;
+		len = (size_t)(end - start);
+		if (len == token_len &&
+		    strncasecmp(start, token, token_len) == 0)
+			return (1);
+	}
+	return (0);
+}
+
+static int
+pw_http_parse_port(const char *s, size_t len, uint16_t *port)
+{
+	unsigned long value = 0;
+	size_t i;
+
+	if (len == 0)
+		return (-1);
+
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)s[i];
+		if (c < '0' || c > '9')
+			return (-1);
+		value = value * 10 + (unsigned long)(c - '0');
+		if (value > 65535)
+			return (-1);
+	}
+	if (value == 0)
+		return (-1);
+
+	*port = (uint16_t)value;
+	return (0);
+}
+
+static ssize_t
+pw_http_read_some(int fd, void *buf, size_t len)
+{
+	ssize_t n;
+
+	do {
+		n = read(fd, buf, len);
+	} while (n < 0 && errno == EINTR);
+	return (n);
+}
+
+static int
+pw_http_write_all(int fd, const void *buf, size_t len)
+{
+	const uint8_t *p = buf;
+
+	while (len > 0) {
+		ssize_t written = write(fd, p, len);
+		if (written < 0) {
+			if (errno == EINTR)
+				continue;
+			return (-1);
+		}
+		if (written == 0)
+			return (-1);
+		p += (size_t)written;
+		len -= (size_t)written;
 	}
 	return (0);
 }
@@ -149,7 +385,7 @@ pw_http_connect(const char *host, uint16_t port, int timeout_ms,
 	for (rp = res; rp != NULL; rp = rp->ai_next) {
 		/* Anti-IP-rebinding: reject private/internal IPs
 		 * unless the upstream was explicitly allowed */
-		if (!ssrf_exempt && pw_is_private_addr(rp->ai_addr)) {
+		if (!ssrf_exempt && vwasm_http_addr_is_private(rp->ai_addr)) {
 			continue;
 		}
 
@@ -206,22 +442,28 @@ pw_http_parse_upstream(const char *upstream, size_t len,
     char *host, size_t host_sz, uint16_t *port)
 {
 	const char *colon;
-	size_t hlen;
+	size_t hlen, plen;
 
 	if (len == 0 || len >= host_sz)
+		return (-1);
+	if (pw_http_has_line_ctl(upstream, len))
 		return (-1);
 
 	colon = memchr(upstream, ':', len);
 	if (colon != NULL) {
 		hlen = (size_t)(colon - upstream);
+		plen = len - hlen - 1;
 		if (hlen == 0 || hlen >= host_sz)
+			return (-1);
+		if (!pw_http_host_ok(upstream, hlen))
+			return (-1);
+		if (pw_http_parse_port(colon + 1, plen, port) != 0)
 			return (-1);
 		memcpy(host, upstream, hlen);
 		host[hlen] = '\0';
-		*port = (uint16_t)atoi(colon + 1);
-		if (*port == 0)
-			*port = 80;
 	} else {
+		if (!pw_http_host_ok(upstream, len))
+			return (-1);
 		memcpy(host, upstream, len);
 		host[len] = '\0';
 		*port = 80;
@@ -247,6 +489,8 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	ssize_t n;
 	const char *method;
 	const char *path;
+	size_t method_len;
+	size_t path_len;
 	char extra_headers[4096];
 	size_t extra_len;
 	uint8_t *body_start;
@@ -257,6 +501,9 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	struct vwasm_http_pool *http_pool;
 	struct vwasm_http_conn *pool_conn = NULL;
 	int ssrf_exempt = 0;
+	int response_complete = 0;
+	int response_reusable = 0;
+	int response_status = PROXY_INTERNAL;
 
 	(void)env;
 	(void)nargs;
@@ -334,81 +581,129 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	 * Extract :method, :path, and other headers.
 	 */
 	method = "GET";
+	method_len = 3;
 	path = "/";
+	path_len = 1;
 	extra_headers[0] = '\0';
 	extra_len = 0;
 
-	if (headers_size >= 4 &&
-	    pw_validate_region(ctx, headers_ptr, headers_size)) {
-		uint8_t *hdr_data = pw_mem_ptr(ctx, headers_ptr);
-		uint32_t num_pairs, hdr_offset, hi;
+	if (headers_size > 0) {
+		uint8_t *hdr_data;
+		uint32_t num_pairs, hi;
+		size_t hdr_offset;
+
+		if (headers_size < 4 ||
+		    !pw_validate_region(ctx, headers_ptr, headers_size)) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
+		hdr_data = pw_mem_ptr(ctx, headers_ptr);
+		if (hdr_data == NULL) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
 
 		memcpy(&num_pairs, hdr_data, 4);
-		if (num_pairs <= 64) {
-			hdr_offset = 4 + num_pairs * 8;
-			for (hi = 0; hi < num_pairs &&
-			    hdr_offset < headers_size; hi++) {
-				uint32_t ks, vs;
-				const char *k, *v;
+		if (num_pairs > 64) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
 
-				memcpy(&ks, hdr_data + 4 + hi * 8, 4);
-				memcpy(&vs, hdr_data + 4 + hi * 8 + 4, 4);
+		hdr_offset = 4 + (size_t)num_pairs * 8;
+		if (hdr_offset > headers_size) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
 
-				if (hdr_offset + ks + 1 + vs + 1 >
-				    headers_size)
-					break;
+		for (hi = 0; hi < num_pairs; hi++) {
+			uint32_t ks, vs;
+			const char *k, *v;
 
-				k = (const char *)(hdr_data + hdr_offset);
-				hdr_offset += ks + 1;
-				v = (const char *)(hdr_data + hdr_offset);
-				hdr_offset += vs + 1;
+			memcpy(&ks, hdr_data + 4 + hi * 8, 4);
+			memcpy(&vs, hdr_data + 4 + hi * 8 + 4, 4);
 
-				if (ks == 7 &&
-				    memcmp(k, ":method", 7) == 0)
-					method = v;
-				else if (ks == 5 &&
-				    memcmp(k, ":path", 5) == 0)
-					path = v;
-				else if (ks > 0 && k[0] != ':') {
-					int written = snprintf(
-					    extra_headers + extra_len,
-					    sizeof(extra_headers) -
-					    extra_len,
-					    "%.*s: %.*s\r\n",
-					    (int)ks, k, (int)vs, v);
-					if (written > 0)
-						extra_len +=
-						    (size_t)written;
+			if ((size_t)ks + 1 > (size_t)headers_size -
+			    hdr_offset) {
+				results[0].of.i32 = PROXY_BAD_ARGUMENT;
+				return (NULL);
+			}
+			k = (const char *)(hdr_data + hdr_offset);
+			if (hdr_data[hdr_offset + ks] != '\0') {
+				results[0].of.i32 = PROXY_BAD_ARGUMENT;
+				return (NULL);
+			}
+			hdr_offset += (size_t)ks + 1;
+
+			if ((size_t)vs + 1 > (size_t)headers_size -
+			    hdr_offset) {
+				results[0].of.i32 = PROXY_BAD_ARGUMENT;
+				return (NULL);
+			}
+			v = (const char *)(hdr_data + hdr_offset);
+			if (hdr_data[hdr_offset + vs] != '\0') {
+				results[0].of.i32 = PROXY_BAD_ARGUMENT;
+				return (NULL);
+			}
+			hdr_offset += (size_t)vs + 1;
+
+			if (ks == 7 && memcmp(k, ":method", 7) == 0) {
+				method = v;
+				method_len = vs;
+			} else if (ks == 5 && memcmp(k, ":path", 5) == 0) {
+				path = v;
+				path_len = vs;
+			} else if (ks > 0 && k[0] != ':') {
+				if (pw_http_append_header(extra_headers,
+				    sizeof(extra_headers), &extra_len,
+				    k, ks, v, vs) != 0) {
+					results[0].of.i32 =
+					    PROXY_BAD_ARGUMENT;
+					return (NULL);
 				}
 			}
 		}
 	}
 
+	if (!pw_http_method_ok(method, method_len) ||
+	    !pw_http_path_ok(path, path_len) ||
+	    method_len > INT_MAX || path_len > INT_MAX) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+
+	if (body_size > 0 &&
+	    !pw_validate_region(ctx, body_ptr, body_size)) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+
+	http_pool = vwasm_engine_get_http_pool(ctx->engine);
+
 	/* Build HTTP/1.1 request */
 	{
-		const char *conn_hdr = (pool_conn != NULL) ?
+		const char *conn_hdr = (http_pool != NULL && ssrf_exempt) ?
 		    "Connection: keep-alive" : "Connection: close";
 
-		if (body_size > 0 &&
-		    pw_validate_region(ctx, body_ptr, body_size)) {
+		if (body_size > 0) {
 			req_len = snprintf(request_buf,
 			    sizeof(request_buf),
-			    "%s %s HTTP/1.1\r\n"
+			    "%.*s %.*s HTTP/1.1\r\n"
 			    "Host: %s\r\n"
 			    "Content-Length: %u\r\n"
 			    "%s\r\n"
 			    "%s\r\n",
-			    method, path, host, body_size,
+			    (int)method_len, method,
+			    (int)path_len, path, host, body_size,
 			    conn_hdr, extra_headers);
 		} else {
-			body_size = 0;
 			req_len = snprintf(request_buf,
 			    sizeof(request_buf),
-			    "%s %s HTTP/1.1\r\n"
+			    "%.*s %.*s HTTP/1.1\r\n"
 			    "Host: %s\r\n"
 			    "%s\r\n"
 			    "%s\r\n",
-			    method, path, host,
+			    (int)method_len, method,
+			    (int)path_len, path, host,
 			    conn_hdr, extra_headers);
 		}
 	}
@@ -419,10 +714,9 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	}
 
 	/* Connect via HTTP pool (if available) or fallback to direct */
-	http_pool = vwasm_engine_get_http_pool(ctx->engine);
 	if (http_pool != NULL) {
 		fd = vwasm_http_pool_acquire(http_pool, host,
-		    port, timeout_ms, &pool_conn);
+		    port, timeout_ms, ssrf_exempt, &pool_conn);
 	} else {
 		fd = pw_http_connect(host, port, (int)timeout_ms,
 		    ssrf_exempt);
@@ -437,7 +731,7 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	}
 
 	/* Send request */
-	if (write(fd, request_buf, (size_t)req_len) != req_len) {
+	if (pw_http_write_all(fd, request_buf, (size_t)req_len) != 0) {
 		if (pool_conn != NULL)
 			vwasm_http_pool_close(http_pool, pool_conn);
 		else
@@ -451,7 +745,8 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	/* Send body if present */
 	if (body_size > 0) {
 		uint8_t *body_data = pw_mem_ptr(ctx, body_ptr);
-		if (write(fd, body_data, body_size) != (ssize_t)body_size) {
+		if (body_data == NULL ||
+		    pw_http_write_all(fd, body_data, body_size) != 0) {
 			if (pool_conn != NULL)
 				vwasm_http_pool_close(http_pool, pool_conn);
 			else
@@ -465,12 +760,14 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 	}
 
 	/* Read response (Content-Length aware to avoid blocking) */
-	response_buf = malloc(PW_HTTP_MAX_RESPONSE);
+	response_buf = malloc(PW_HTTP_MAX_RESPONSE + 1);
 	if (response_buf == NULL) {
 		if (pool_conn != NULL)
 			vwasm_http_pool_close(http_pool, pool_conn);
 		else
 			close(fd);
+		if (http_pool != NULL)
+			vwasm_http_pool_cb_failure(http_pool, host, port);
 		results[0].of.i32 = PROXY_INTERNAL;
 		return (NULL);
 	}
@@ -483,7 +780,7 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 
 		/* Phase 1: read until end of headers (\r\n\r\n) */
 		while (response_len < PW_HTTP_MAX_RESPONSE) {
-			n = read(fd, response_buf + response_len,
+			n = pw_http_read_some(fd, response_buf + response_len,
 			    PW_HTTP_MAX_RESPONSE - response_len);
 			if (n <= 0)
 				break;
@@ -496,59 +793,125 @@ pw_proxy_http_call(void *env, wasmtime_caller_t *caller,
 
 		/* Phase 2: parse Content-Length and read remaining body */
 		if (hdr_end != NULL) {
-			char *cl;
+			const char *value;
+			size_t value_len;
+			size_t header_bytes;
+			int conn_close = 0;
+			int http11;
 
 			hdr_end += 4; /* skip \r\n\r\n */
-			cl = strcasestr((char *)response_buf,
-			    "Content-Length:");
-			if (cl != NULL && cl < hdr_end) {
-				content_length = (size_t)atoi(cl + 15);
-				cl_found = 1;
+			header_bytes = (size_t)(hdr_end -
+			    (char *)response_buf);
+			http11 = response_len >= 8 &&
+			    memcmp(response_buf, "HTTP/1.1", 8) == 0;
+
+			if (pw_http_find_header_value((char *)response_buf,
+			    header_bytes, "Transfer-Encoding", &value,
+			    &value_len) &&
+			    pw_http_value_has_token(value, value_len,
+			    "chunked")) {
+				response_status = PROXY_UNIMPLEMENTED;
+			} else {
+				if (pw_http_find_header_value(
+				    (char *)response_buf, header_bytes,
+				    "Connection", &value, &value_len) &&
+				    pw_http_value_has_token(value, value_len,
+				    "close"))
+					conn_close = 1;
+
+				if (pw_http_find_header_value(
+				    (char *)response_buf, header_bytes,
+				    "Content-Length", &value, &value_len)) {
+					if (pw_http_parse_size(value,
+					    value_len, &content_length) != 0) {
+						response_status =
+						    PROXY_PARSE_FAILURE;
+						goto response_done;
+					}
+					cl_found = 1;
+				}
 			}
 
-			if (cl_found) {
-				size_t body_have = response_len -
-				    (size_t)(hdr_end -
-				    (char *)response_buf);
-				size_t body_need = (content_length > body_have)
-				    ? content_length - body_have : 0;
+			if (response_status != PROXY_INTERNAL)
+				goto response_done;
 
-				while (body_need > 0 &&
-				    response_len < PW_HTTP_MAX_RESPONSE) {
-					n = read(fd,
+			if (cl_found) {
+				size_t body_have;
+				size_t body_need;
+
+				if (content_length >
+				    PW_HTTP_MAX_RESPONSE - header_bytes) {
+					response_status = PROXY_INTERNAL;
+					goto response_done;
+				}
+
+				body_have = response_len - header_bytes;
+				if (body_have > content_length) {
+					response_len = header_bytes +
+					    content_length;
+					response_buf[response_len] = '\0';
+					response_complete = 1;
+					response_reusable = 0;
+					goto response_done;
+				}
+
+				body_need = content_length - body_have;
+				while (body_need > 0) {
+					size_t room, to_read;
+
+					room = PW_HTTP_MAX_RESPONSE -
+					    response_len;
+					if (room == 0)
+						break;
+					to_read = body_need < room ?
+					    body_need : room;
+					n = pw_http_read_some(fd,
 					    response_buf + response_len,
-					    (body_need <
-					    PW_HTTP_MAX_RESPONSE - response_len)
-					    ? body_need
-					    : PW_HTTP_MAX_RESPONSE -
-					    response_len);
+					    to_read);
 					if (n <= 0)
 						break;
 					response_len += (size_t)n;
+					response_buf[response_len] = '\0';
 					body_need -= (size_t)n;
 				}
+
+				if (body_need == 0) {
+					response_complete = 1;
+					response_reusable = http11 &&
+					    !conn_close && ssrf_exempt;
+				}
+			} else if (response_len == header_bytes) {
+				response_complete = 1;
+				response_reusable = 0;
+			} else {
+				response_status = PROXY_PARSE_FAILURE;
 			}
+		} else {
+			response_status = PROXY_PARSE_FAILURE;
 		}
+response_done:
+		if (response_complete)
+			response_status = PROXY_OK;
 	}
 
-	/* Release connection back to pool (keep-alive) */
+	/* Release only fully framed HTTP/1.1 responses back to the pool. */
 	if (pool_conn != NULL)
 		vwasm_http_pool_release(http_pool, pool_conn,
-		    response_len > 0 ? 1 : 0);
+		    response_reusable);
 	else
 		close(fd);
 
-	/* Report success/failure to circuit breaker */
+	/* Report success/failure to circuit breaker. */
 	if (http_pool != NULL) {
-		if (response_len > 0)
+		if (response_complete)
 			vwasm_http_pool_cb_success(http_pool, host, port);
 		else
 			vwasm_http_pool_cb_failure(http_pool, host, port);
 	}
 
-	if (response_len == 0) {
+	if (!response_complete || response_len == 0) {
 		free(response_buf);
-		results[0].of.i32 = PROXY_INTERNAL;
+		results[0].of.i32 = response_status;
 		return (NULL);
 	}
 

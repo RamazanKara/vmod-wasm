@@ -160,11 +160,12 @@ void vwasm_http_pool_destroy(struct vwasm_http_pool **poolp);
  * Otherwise creates a new connection.
  *
  * timeout_ms: connect timeout (0 = use pool default).
+ * ssrf_exempt: allow private/internal resolved addresses.
  * Returns FD >= 0 on success, -1 on failure.
  * On success, conn_out is set (caller must release when done).
  */
 int vwasm_http_pool_acquire(struct vwasm_http_pool *pool,
-    const char *host, uint16_t port, uint32_t timeout_ms,
+    const char *host, uint16_t port, uint32_t timeout_ms, int ssrf_exempt,
     struct vwasm_http_conn **conn_out);
 
 /*
@@ -244,5 +245,11 @@ void vwasm_http_pool_cache_put(struct vwasm_http_pool *pool,
  * Get pool statistics as JSON string (caller must free).
  */
 char *vwasm_http_pool_stats_json(const struct vwasm_http_pool *pool);
+
+/*
+ * Return true for private/internal addresses that proxy_http_call must not
+ * reach unless the upstream was explicitly allowlisted.
+ */
+int vwasm_http_addr_is_private(const struct sockaddr *sa);
 
 #endif /* VWASM_HTTP_POOL_H */

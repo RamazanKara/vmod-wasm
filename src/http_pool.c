@@ -119,6 +119,81 @@ conn_is_alive(int fd)
 	return (1);  /* Data available: might be stale response */
 }
 
+int
+vwasm_http_addr_is_private(const struct sockaddr *sa)
+{
+	if (sa == NULL)
+		return (1);
+
+	if (sa->sa_family == AF_INET) {
+		const struct sockaddr_in *sin;
+		uint32_t ip;
+
+		sin = (const struct sockaddr_in *)sa;
+		ip = ntohl(sin->sin_addr.s_addr);
+
+		/* 127.0.0.0/8 — loopback */
+		if ((ip >> 24) == 127)
+			return (1);
+		/* 10.0.0.0/8 — RFC1918 */
+		if ((ip >> 24) == 10)
+			return (1);
+		/* 172.16.0.0/12 — RFC1918 */
+		if ((ip >> 20) == (172 << 4 | 1))
+			return (1);
+		/* 192.168.0.0/16 — RFC1918 */
+		if ((ip >> 16) == ((192 << 8) | 168))
+			return (1);
+		/* 169.254.0.0/16 — link-local */
+		if ((ip >> 16) == ((169 << 8) | 254))
+			return (1);
+		/* 0.0.0.0/8 — "this" network */
+		if ((ip >> 24) == 0)
+			return (1);
+		/* 100.64.0.0/10 — shared address space (CGN) */
+		if ((ip >> 22) == (100 << 2 | 1))
+			return (1);
+		/* 192.0.0.0/24 — IETF protocol assignments */
+		if ((ip >> 8) == ((192 << 16) | 0))
+			return (1);
+		/* 198.18.0.0/15 — benchmarking */
+		if ((ip >> 17) == ((198 << 7) | 9))
+			return (1);
+		/* 240.0.0.0/4 — reserved (includes broadcast) */
+		if ((ip >> 28) == 15)
+			return (1);
+	} else if (sa->sa_family == AF_INET6) {
+		const struct sockaddr_in6 *sin6;
+		const uint8_t *b;
+
+		sin6 = (const struct sockaddr_in6 *)sa;
+		b = sin6->sin6_addr.s6_addr;
+
+		/* ::1/128 — loopback */
+		if (memcmp(b, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\1", 16) == 0)
+			return (1);
+		/* ::/128 — unspecified */
+		if (memcmp(b, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 16) == 0)
+			return (1);
+		/* fc00::/7 — unique local (RFC4193) */
+		if ((b[0] & 0xfe) == 0xfc)
+			return (1);
+		/* fe80::/10 — link-local */
+		if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80)
+			return (1);
+		/* ::ffff:0:0/96 — IPv4-mapped, check inner IPv4 */
+		if (memcmp(b, "\0\0\0\0\0\0\0\0\0\0\xff\xff", 12) == 0) {
+			struct sockaddr_in inner;
+			memset(&inner, 0, sizeof(inner));
+			inner.sin_family = AF_INET;
+			memcpy(&inner.sin_addr.s_addr, b + 12, 4);
+			return (vwasm_http_addr_is_private(
+			    (const struct sockaddr *)&inner));
+		}
+	}
+	return (0);
+}
+
 /*
  * Connect to host:port with timeout.
  */
@@ -538,7 +613,7 @@ vwasm_http_pool_cb_failure(struct vwasm_http_pool *pool,
 
 int
 vwasm_http_pool_acquire(struct vwasm_http_pool *pool,
-    const char *host, uint16_t port, uint32_t timeout_ms,
+    const char *host, uint16_t port, uint32_t timeout_ms, int ssrf_exempt,
     struct vwasm_http_conn **conn_out)
 {
 	struct sockaddr_storage addr;
@@ -565,6 +640,8 @@ vwasm_http_pool_acquire(struct vwasm_http_pool *pool,
 	for (i = 0; i < pool->max_conns; i++) {
 		struct vwasm_http_conn *c = &pool->conns[i];
 
+		if (!ssrf_exempt)
+			continue;
 		if (c->fd < 0 || c->in_use)
 			continue;
 		if (strcmp(c->host, host) != 0 || c->port != port)
@@ -607,6 +684,9 @@ vwasm_http_pool_acquire(struct vwasm_http_pool *pool,
 
 	/* Resolve DNS */
 	if (vwasm_http_pool_resolve(pool, host, port, &addr, &addrlen) != 0)
+		return (-1);
+	if (!ssrf_exempt &&
+	    vwasm_http_addr_is_private((const struct sockaddr *)&addr))
 		return (-1);
 
 	/* Connect with timeout */
