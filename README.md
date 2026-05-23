@@ -119,8 +119,12 @@ make install
 
 ### Release Bundles
 
-GitHub releases publish source and convenience binary bundles for Linux
-`amd64` and `arm64` on Varnish 9. Binary bundles include `libvmod_wasm.so`,
+GitHub releases use Varnish-specific tags such as `varnish9-v4.3.1` so the
+supported Varnish ABI line is visible before download. The package version
+remains semantic (`4.3.1`), while the release channel identifies Varnish 9.
+
+Release assets include source and convenience binary bundles for Linux `amd64`
+and `arm64` on Varnish 9. Binary bundles include `libvmod_wasm.so`,
 `libwasmtime.so`, notices, checksums, and an install note. Source builds remain
 the authoritative path for custom Varnish installations.
 

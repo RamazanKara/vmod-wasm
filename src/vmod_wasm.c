@@ -34,7 +34,7 @@
 #include "proxy_wasm.h"
 #include "vdp_wasm.h"
 
-#define VMOD_WASM_VERSION "4.3.0"
+#define VMOD_WASM_VERSION "4.3.1"
 
 /* Global Wasm engine — shared across all VCL instances and threads */
 static struct vwasm_engine *vwasm_engine_global = NULL;
@@ -737,4 +737,3 @@ vmod_get_http_pool_stats_json(VRT_CTX)
 
 	return (result);
 }
-

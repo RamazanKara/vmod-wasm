@@ -2,6 +2,24 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [4.3.1] - 2026-05-23
+
+### Release Channel
+- Varnish 9 releases now use `varnish9-vX.Y.Z` tags so compatibility is visible
+  in the release identity, not only in asset names.
+- GitHub release titles now use `Varnish 9 / vX.Y.Z` while the package version
+  remains standard semantic versioning.
+
+### Changed
+- Release artifacts are renamed with the Varnish channel first, for example
+  `vmod-wasm-varnish9-4.3.1-linux-amd64.tar.gz`.
+- Release notes now lead with the Varnish, Wasmtime, platform, and tag contract.
+- Release manifests are named `manifest-varnish9-X.Y.Z.json` and include the
+  release tag and channel metadata.
+
+### Fixed
+- Avoids publishing Varnish-specific binaries under a generic `vX.Y.Z` tag line.
+
 ## [4.3.0] - 2026-05-23
 
 ### Added

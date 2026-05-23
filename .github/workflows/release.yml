@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'varnish9-v*'
 
 permissions:
   contents: write
@@ -38,24 +38,42 @@ jobs:
             --load \
             -t vmod-wasm-release-${{ matrix.arch }} .
 
-      - name: Extract version from tag
+      - name: Extract release metadata
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          case "$GITHUB_REF_NAME" in
+            varnish9-v*) version="${GITHUB_REF_NAME#varnish9-v}" ;;
+            *)
+              echo "::error::Release tags must match varnish9-vX.Y.Z"
+              exit 1
+              ;;
+          esac
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release version: $version"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact_prefix=vmod-wasm-varnish9-$version" >> "$GITHUB_OUTPUT"
 
       - name: Package binary artifact
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACT_PREFIX: ${{ steps.version.outputs.artifact_prefix }}
           ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p dist
           docker run --rm --platform linux/${{ matrix.arch }} \
             -e VERSION="$VERSION" \
+            -e ARTIFACT_PREFIX="$ARTIFACT_PREFIX" \
             -e ARCH="$ARCH" \
             -e WASMTIME_VERSION="${{ env.WASMTIME_VERSION }}" \
             -e VARNISH_VERSION="${{ env.VARNISH_VERSION }}" \
             -v "$PWD/dist:/dist" \
             vmod-wasm-release-${{ matrix.arch }} sh -ceu '
-              pkg="/tmp/vmod-wasm-${VERSION}-varnish9-linux-${ARCH}"
+              pkg="/tmp/${ARTIFACT_PREFIX}-linux-${ARCH}"
               mkdir -p "$pkg/lib" "$pkg/licenses"
               cp /src/src/.libs/libvmod_wasm.so "$pkg/lib/"
               cp -a /opt/wasmtime/lib/libwasmtime.so* "$pkg/lib/"
@@ -70,13 +88,13 @@ jobs:
           Install both shared libraries into your VMOD/runtime library location or
           keep this bundle together and expose the lib directory to varnishd:
 
-              export LD_LIBRARY_PATH=/path/to/vmod-wasm-${VERSION}-varnish9-linux-${ARCH}/lib:\$LD_LIBRARY_PATH
+              export LD_LIBRARY_PATH=/path/to/${ARTIFACT_PREFIX}-linux-${ARCH}/lib:\$LD_LIBRARY_PATH
 
           The VMOD is built and tested against Varnish ${VARNISH_VERSION}. Source
           builds remain the authoritative path for custom Varnish installations.
           EOF
-              tar -czf "/dist/vmod-wasm-${VERSION}-varnish9-linux-${ARCH}.tar.gz" \
-                -C /tmp "vmod-wasm-${VERSION}-varnish9-linux-${ARCH}"
+              tar -czf "/dist/${ARTIFACT_PREFIX}-linux-${ARCH}.tar.gz" \
+                -C /tmp "${ARTIFACT_PREFIX}-linux-${ARCH}"
               {
                 echo "arch=${ARCH}"
                 echo "varnish_version=$(/usr/sbin/varnishd -V 2>&1 | head -n1)"
@@ -89,34 +107,36 @@ jobs:
         if: matrix.arch == 'amd64'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACT_PREFIX: ${{ steps.version.outputs.artifact_prefix }}
         run: |
           docker run --rm --platform linux/${{ matrix.arch }} \
             -e VERSION="$VERSION" \
+            -e ARTIFACT_PREFIX="$ARTIFACT_PREFIX" \
             -v "$PWD/dist:/dist" \
             vmod-wasm-release-${{ matrix.arch }} sh -ceu '
               make dist
-              cp "vmod-wasm-${VERSION}.tar.gz" "/dist/vmod-wasm-${VERSION}-src.tar.gz"
-              tmp="/tmp/vmod-wasm-${VERSION}-examples-wasm"
+              cp "vmod-wasm-${VERSION}.tar.gz" "/dist/${ARTIFACT_PREFIX}-src.tar.gz"
+              tmp="/tmp/${ARTIFACT_PREFIX}-examples-wasm"
               mkdir -p "$tmp"
               cp /src/tests/wasm/*.wasm "$tmp/"
               cp /src/examples/edge-security-filter/config.json "$tmp/edge-security-filter-config.json"
-              tar -czf "/dist/vmod-wasm-${VERSION}-examples-wasm.tar.gz" \
-                -C /tmp "vmod-wasm-${VERSION}-examples-wasm"
+              tar -czf "/dist/${ARTIFACT_PREFIX}-examples-wasm.tar.gz" \
+                -C /tmp "${ARTIFACT_PREFIX}-examples-wasm"
             '
 
       - name: Smoke test binary bundle
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACT_PREFIX: ${{ steps.version.outputs.artifact_prefix }}
           ARCH: ${{ matrix.arch }}
         run: |
           docker run --rm --platform linux/${{ matrix.arch }} \
-            -e VERSION="$VERSION" \
+            -e ARTIFACT_PREFIX="$ARTIFACT_PREFIX" \
             -e ARCH="$ARCH" \
             -v "$PWD/dist:/dist" \
             varnish:${{ env.VARNISH_VERSION }} sh -ceu '
+              pkg="/tmp/pkg/${ARTIFACT_PREFIX}-linux-${ARCH}"
               mkdir -p /tmp/pkg
-              tar -xzf "/dist/vmod-wasm-${VERSION}-varnish9-linux-${ARCH}.tar.gz" -C /tmp/pkg
-              pkg=$(find /tmp/pkg -maxdepth 1 -type d -name "vmod-wasm-*" | head -n1)
+              tar -xzf "/dist/${ARTIFACT_PREFIX}-linux-${ARCH}.tar.gz" -C /tmp/pkg
               LD_LIBRARY_PATH="$pkg/lib" ldd "$pkg/lib/libvmod_wasm.so" | tee /tmp/ldd.txt
               grep "libwasmtime.so.*=>.*$pkg/lib" /tmp/ldd.txt
             '
@@ -124,7 +144,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.arch }}
+          name: release-varnish9-${{ matrix.arch }}
           path: dist/
 
   release:
@@ -136,27 +156,86 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract version from tag
+      - name: Extract release metadata
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Extract changelog section
-        id: changelog
+        shell: bash
         run: |
-          version="${{ steps.version.outputs.version }}"
-          notes=$(awk -v ver="$version" '
-            /^## \[/ {
-              if (found) exit
-              if (index($0, "[" ver "]")) found=1
-              next
-            }
-            found { print }
-          ' CHANGELOG.md)
-          {
-            echo "notes<<EOF"
-            echo "$notes"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          case "$GITHUB_REF_NAME" in
+            varnish9-v*) version="${GITHUB_REF_NAME#varnish9-v}" ;;
+            *)
+              echo "::error::Release tags must match varnish9-vX.Y.Z"
+              exit 1
+              ;;
+          esac
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release version: $version"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact_prefix=vmod-wasm-varnish9-$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACT_PREFIX: ${{ steps.version.outputs.artifact_prefix }}
+          WASMTIME_VERSION: ${{ env.WASMTIME_VERSION }}
+          VARNISH_VERSION: ${{ env.VARNISH_VERSION }}
+        run: |
+          python3 - <<'PY'
+          import os
+
+          version = os.environ["VERSION"]
+          artifact_prefix = os.environ["ARTIFACT_PREFIX"]
+          wasmtime_version = os.environ["WASMTIME_VERSION"]
+          varnish_version = os.environ["VARNISH_VERSION"]
+          tag = os.environ["GITHUB_REF_NAME"]
+
+          lines = open("CHANGELOG.md", encoding="utf-8").read().splitlines()
+          notes = []
+          found = False
+          for line in lines:
+              if line.startswith("## ["):
+                  if found:
+                      break
+                  found = line.startswith(f"## [{version}]")
+                  continue
+              if found:
+                  notes.append(line)
+
+          changelog = "\n".join(notes).strip() or "See the repository changelog for details."
+          body = "\n".join([
+              f"# Varnish 9 / v{version}",
+              "",
+              f"This release targets Varnish 9.x and bundles Wasmtime {wasmtime_version}.",
+              f"Use the `{tag}` release channel for Varnish 9-compatible builds.",
+              "",
+              "## Compatibility",
+              f"- Varnish: 9.x, validated with `varnish:{varnish_version}`",
+              f"- Wasmtime: {wasmtime_version}, bundled in binary tarballs",
+              "- Platforms: linux/amd64 and linux/arm64",
+              "- VCL API: no compatibility break from v4.3.0",
+              "",
+              "## Changes",
+              changelog,
+              "",
+              "## Assets",
+              f"- `{artifact_prefix}-src.tar.gz`",
+              f"- `{artifact_prefix}-linux-amd64.tar.gz`",
+              f"- `{artifact_prefix}-linux-arm64.tar.gz`",
+              f"- `{artifact_prefix}-examples-wasm.tar.gz`",
+              f"- `manifest-varnish9-{version}.json`",
+              "- `SHA256SUMS`",
+              "",
+              "## Verification",
+              f"Binary bundles are smoke tested in a fresh `varnish:{varnish_version}` container,",
+              "including an `ldd` check that `libvmod_wasm.so` resolves the bundled `libwasmtime.so`.",
+              "`SHA256SUMS` covers all release tarballs and the manifest.",
+              "",
+          ])
+          open("release-notes.md", "w", encoding="utf-8").write(body)
+          PY
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -190,6 +269,8 @@ jobs:
           manifest = {
               "name": "vmod-wasm",
               "version": version,
+              "release_channel": "varnish9",
+              "tag": os.environ["GITHUB_REF_NAME"],
               "git_sha": os.environ["GITHUB_SHA"],
               "support": {
                   "varnish": "9.x",
@@ -202,18 +283,19 @@ jobs:
                   for path in glob.glob("release-dist/*.tar.gz")
               ),
           }
-          with open(f"release-dist/manifest-{version}.json", "w", encoding="utf-8") as fh:
+          with open(f"release-dist/manifest-varnish9-{version}.json", "w", encoding="utf-8") as fh:
               json.dump(manifest, fh, indent=2)
               fh.write("\n")
           PY
           cd release-dist
-          sha256sum *.tar.gz "manifest-${VERSION}.json" > SHA256SUMS
+          sha256sum *.tar.gz "manifest-varnish9-${VERSION}.json" > SHA256SUMS
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --notes "${{ steps.changelog.outputs.notes }}" \
+            --title "Varnish 9 / v${VERSION}" \
+            --notes-file release-notes.md \
             release-dist/*
