@@ -44,6 +44,7 @@ src/vcc_if.h
 
 # Internal planning docs
 /plan/
+/soak-logs/
 
 # OS
 .DS_Store

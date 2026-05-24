@@ -24,6 +24,7 @@ EXTRA_DIST = \
 	CHANGELOG.md \
 	Dockerfile \
 	autogen.sh \
+	scripts/soak-test.sh \
 	.github/dependabot.yml \
 	.github/PULL_REQUEST_TEMPLATE.md \
 	.github/ISSUE_TEMPLATE/bug_report.md \
@@ -86,7 +87,7 @@ EXTRA_DIST = \
 # symbols (http_SetH, VRT_priv_task_get, etc.) are only available inside
 # varnishd at runtime. Integration testing is done via VTC tests below.
 
-.PHONY: build build-wasm-test-fixtures lint fmt audit test docker-test release-dry-run
+.PHONY: build build-wasm-test-fixtures lint fmt audit test docker-test soak-test release-dry-run
 
 build: all build-wasm-test-fixtures
 
@@ -123,6 +124,9 @@ test: docker-test
 docker-test:
 	$(DOCKER) build -t "$(DOCKER_IMAGE)" "$(abs_top_srcdir)"
 	$(DOCKER) run --rm "$(DOCKER_IMAGE)" make check
+
+soak-test:
+	"$(abs_top_srcdir)/scripts/soak-test.sh" --image "$(DOCKER_IMAGE)"
 
 release-dry-run:
 	$(DOCKER) build -t "$(DOCKER_IMAGE)" "$(abs_top_srcdir)"
