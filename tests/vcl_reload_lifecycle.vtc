@@ -1,0 +1,59 @@
+varnishtest "vmod-wasm: VCL reload keeps engines isolated"
+
+server s1 {
+    rxreq
+    txresp -status 200 -body "one"
+
+    rxreq
+    txresp -status 200 -body "two"
+} -start
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result = wasm.execute("test", "get_constant");
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+        set resp.http.X-Wasm-VCL = "one";
+    }
+} -start
+
+client c1 {
+    txreq -url "/one"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "42"
+    expect resp.http.X-Wasm-VCL == "one"
+} -run
+
+varnish v1 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result = wasm.execute("test", "get_constant");
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+        set resp.http.X-Wasm-VCL = "two";
+    }
+}
+
+client c2 {
+    txreq -url "/two"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "42"
+    expect resp.http.X-Wasm-VCL == "two"
+} -run

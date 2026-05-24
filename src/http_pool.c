@@ -19,6 +19,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -59,15 +60,6 @@ make_cache_key(const char *method, const char *host, uint16_t port,
 	snprintf(key, (size_t)len + 1, "%s:%s:%u:%s",
 	    method, host, port, path);
 	return (key);
-}
-
-static char *
-make_upstream_key(const char *host, uint16_t port)
-{
-	char key[280];
-
-	snprintf(key, sizeof(key), "%s:%u", host, port);
-	return (strdup(key));
 }
 
 static int
@@ -111,12 +103,16 @@ conn_is_alive(int fd)
 		return (0);
 	if (ret == 0)
 		return (1);  /* No data pending = alive and idle */
+	if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
+		return (0);
+	if (!(pfd.revents & POLLIN))
+		return (1);
 
-	/* Data pending: either response data (unlikely) or EOF */
+	/* Data pending means the connection is not cleanly idle. */
 	ret = (int)recv(fd, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
 	if (ret <= 0)
 		return (0);  /* EOF or error: peer closed */
-	return (1);  /* Data available: might be stale response */
+	return (0);
 }
 
 int
@@ -197,6 +193,8 @@ vwasm_http_addr_is_private(const struct sockaddr *sa)
 /*
  * Connect to host:port with timeout.
  */
+static void set_io_timeouts(int fd, uint32_t timeout_ms);
+
 static int
 connect_with_timeout(const struct sockaddr_storage *addr, socklen_t addrlen,
     uint32_t timeout_ms)
@@ -221,6 +219,7 @@ connect_with_timeout(const struct sockaddr_storage *addr, socklen_t addrlen,
 	ret = connect(fd, (const struct sockaddr *)addr, addrlen);
 	if (ret == 0) {
 		set_blocking(fd);
+		set_io_timeouts(fd, timeout_ms);
 		return (fd);
 	}
 
@@ -249,7 +248,21 @@ connect_with_timeout(const struct sockaddr_storage *addr, socklen_t addrlen,
 	}
 
 	set_blocking(fd);
+	set_io_timeouts(fd, timeout_ms);
 	return (fd);
+}
+
+static void
+set_io_timeouts(int fd, uint32_t timeout_ms)
+{
+	struct timeval tv;
+
+	if (timeout_ms == 0)
+		timeout_ms = VWASM_HTTP_DEFAULT_TIMEOUT_MS;
+	tv.tv_sec = timeout_ms / 1000;
+	tv.tv_usec = (timeout_ms % 1000) * 1000;
+	(void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	(void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
 /* ----------------------------------------------------------------

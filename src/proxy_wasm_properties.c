@@ -176,6 +176,7 @@ pw_proxy_set_property(void *env, wasmtime_caller_t *caller,
 	char path_buf[512], value_buf[4096];
 	uint32_t path_size, value_size;
 	struct http *hp;
+	const char *ws_value;
 
 	(void)env;
 	(void)nargs;
@@ -219,8 +220,13 @@ pw_proxy_set_property(void *env, wasmtime_caller_t *caller,
 			results[0].of.i32 = PROXY_BAD_ARGUMENT;
 			return (NULL);
 		}
-		http_SetH(hp, HTTP_HDR_URL, WS_Copy(vctx->ws,
-		    value_buf, (int)(value_size + 1)));
+		ws_value = WS_Copy(vctx->ws, value_buf,
+		    (int)(value_size + 1));
+		if (ws_value == NULL) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		http_SetH(hp, HTTP_HDR_URL, ws_value);
 		results[0].of.i32 = PROXY_OK;
 		return (NULL);
 	}
@@ -232,8 +238,13 @@ pw_proxy_set_property(void *env, wasmtime_caller_t *caller,
 			results[0].of.i32 = PROXY_BAD_ARGUMENT;
 			return (NULL);
 		}
-		http_SetH(hp, HTTP_HDR_METHOD, WS_Copy(vctx->ws,
-		    value_buf, (int)(value_size + 1)));
+		ws_value = WS_Copy(vctx->ws, value_buf,
+		    (int)(value_size + 1));
+		if (ws_value == NULL) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		http_SetH(hp, HTTP_HDR_METHOD, ws_value);
 		results[0].of.i32 = PROXY_OK;
 		return (NULL);
 	}
@@ -249,8 +260,13 @@ pw_proxy_set_property(void *env, wasmtime_caller_t *caller,
 		snprintf(hdr_line, sizeof(hdr_line), "Host: %.*s",
 		    (int)value_size, value_buf);
 		http_Unset(hp, (hdr_t)"\005Host:");
-		http_SetHeader(hp, WS_Copy(vctx->ws,
-		    hdr_line, (int)(strlen(hdr_line) + 1)));
+		ws_value = WS_Copy(vctx->ws, hdr_line,
+		    (int)(strlen(hdr_line) + 1));
+		if (ws_value == NULL) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		http_SetHeader(hp, ws_value);
 		results[0].of.i32 = PROXY_OK;
 		return (NULL);
 	}

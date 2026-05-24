@@ -1130,6 +1130,7 @@ pw_proxy_get_metric(void *env, wasmtime_caller_t *caller,
 	struct vwasm_metric_store *store;
 	uint32_t metric_id;
 	uint64_t value;
+	uint8_t *dst;
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
@@ -1160,7 +1161,12 @@ pw_proxy_get_metric(void *env, wasmtime_caller_t *caller,
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}
-	memcpy(pw_mem_ptr(ctx, (uint32_t)args[1].of.i32), &value, 8);
+	dst = pw_mem_ptr(ctx, (uint32_t)args[1].of.i32);
+	if (dst == NULL) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+	memcpy(dst, &value, 8);
 
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);

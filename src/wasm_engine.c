@@ -312,7 +312,24 @@ vwasm_engine_destroy(struct vwasm_engine **enginep)
 	e = *enginep;
 	*enginep = NULL;
 
-	/* Stop epoch timer thread */
+	/* Stop tick timers before module and store teardown. */
+	for (i = 0; i < MAX_MODULES; i++) {
+		if (e->tick_timers[i] != NULL) {
+			e->tick_timers[i]->running = 0;
+			pthread_join(e->tick_timers[i]->thread, NULL);
+			free(e->tick_timers[i]);
+			e->tick_timers[i] = NULL;
+		}
+	}
+
+	/* Destroy pooled stores while the Wasmtime engine/modules still exist. */
+	vwasm_engine_destroy_pools(e);
+
+	/* Phase 3: Destroy HTTP pool */
+	if (e->http_pool != NULL)
+		vwasm_http_pool_destroy(&e->http_pool);
+
+	/* Stop epoch timer thread before deleting the Wasmtime engine. */
 	e->epoch_running = 0;
 	pthread_join(e->epoch_thread, NULL);
 
@@ -330,23 +347,6 @@ vwasm_engine_destroy(struct vwasm_engine **enginep)
 		for (i = 0; i < (int)e->num_allowed_upstreams; i++)
 			free(e->allowed_upstreams[i]);
 		free(e->allowed_upstreams);
-	}
-
-	/* Phase 1+2: Destroy pools and warm instances */
-	vwasm_engine_destroy_pools(e);
-
-	/* Phase 3: Destroy HTTP pool */
-	if (e->http_pool != NULL)
-		vwasm_http_pool_destroy(&e->http_pool);
-
-	/* Stop and free tick timers */
-	for (i = 0; i < MAX_MODULES; i++) {
-		if (e->tick_timers[i] != NULL) {
-			e->tick_timers[i]->running = 0;
-			pthread_join(e->tick_timers[i]->thread, NULL);
-			free(e->tick_timers[i]);
-			e->tick_timers[i] = NULL;
-		}
 	}
 
 	free(e);
@@ -615,10 +615,18 @@ vwasm_engine_load_module(struct vwasm_engine *engine,
 	unsigned char *bytes = NULL;
 	wasmtime_module_t *module = NULL;
 	wasmtime_error_t *error = NULL;
+	char *module_name = NULL;
 	int ret = -1;
+	int i;
 
 	if (engine == NULL || name == NULL || path == NULL)
 		return (-1);
+
+	for (i = 0; i < engine->nmodules; i++) {
+		if (engine->modules[i].name != NULL &&
+		    strcmp(engine->modules[i].name, name) == 0)
+			return (-1);
+	}
 
 	/* Read the .wasm file */
 	fp = fopen(path, "rb");
@@ -671,7 +679,16 @@ vwasm_engine_load_module(struct vwasm_engine *engine,
 		return (-1);
 	}
 
-	engine->modules[engine->nmodules].name = strdup(name);
+	module_name = strdup(name);
+	if (module_name == NULL) {
+		wasmtime_instance_pre_delete(
+		    engine->modules[engine->nmodules].instance_pre);
+		engine->modules[engine->nmodules].instance_pre = NULL;
+		wasmtime_module_delete(module);
+		return (-1);
+	}
+
+	engine->modules[engine->nmodules].name = module_name;
 	engine->modules[engine->nmodules].module = module;
 	engine->nmodules++;
 	ret = 0;
@@ -1618,48 +1635,6 @@ vwasm_engine_get_http_pool_stats_json(struct vwasm_engine *engine)
  * Phase 4: Filter Chain
  * ================================================================ */
 
-/*
- * Parse a comma-separated chain specification into module names.
- * Returns the count of parsed names.
- * Names array must be at least VWASM_CHAIN_MAX_FILTERS in size.
- * Caller must free each name after use.
- */
-static int
-parse_chain_spec(const char *chain_spec, char **names, int max_names)
-{
-	const char *p, *start;
-	int count = 0;
-
-	if (chain_spec == NULL || names == NULL)
-		return (0);
-
-	p = chain_spec;
-	while (*p != '\0' && count < max_names) {
-		/* Skip leading whitespace and commas */
-		while (*p == ',' || *p == ' ' || *p == '\t')
-			p++;
-		if (*p == '\0')
-			break;
-
-		start = p;
-		/* Find end of name */
-		while (*p != ',' && *p != '\0' && *p != ' ' && *p != '\t')
-			p++;
-
-		if (p > start) {
-			size_t len = (size_t)(p - start);
-			names[count] = malloc(len + 1);
-			if (names[count] == NULL)
-				break;
-			memcpy(names[count], start, len);
-			names[count][len] = '\0';
-			count++;
-		}
-	}
-
-	return (count);
-}
-
 int
 vwasm_filter_chain_request(struct vwasm_engine *engine,
     const struct vrt_ctx *ctx,
@@ -1762,4 +1737,3 @@ vwasm_engine_set_tick_period(struct vwasm_engine *engine,
 	engine->tick_timers[idx] = tt;
 	return (0);
 }
-

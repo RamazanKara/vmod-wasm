@@ -22,6 +22,7 @@
 
 #include "store_pool.h"
 #include "wasm_engine.h"
+#include "proxy_wasm.h"
 
 /* Per-slot in-use flag — separate from pooled_store to avoid false sharing */
 struct pool_slot_state {
@@ -54,12 +55,14 @@ vwasm_warm_instance_create(struct vwasm_warm_instance *warm,
 	wasm_trap_t *trap = NULL;
 	wasmtime_extern_t item;
 	wasmtime_val_t args[2];
+	struct vwasm_proxy_ctx proxy_ctx;
 	size_t vm_config_len, plugin_config_len;
 	uint8_t *mem_data;
 	size_t mem_size;
 
 	memset(warm, 0, sizeof(*warm));
 	warm->valid = 0;
+	memset(&proxy_ctx, 0, sizeof(proxy_ctx));
 
 	if (engine == NULL || entry == NULL || entry->instance_pre == NULL)
 		return (-1);
@@ -74,6 +77,20 @@ vwasm_warm_instance_create(struct vwasm_warm_instance *warm,
 		return (-1);
 
 	context = wasmtime_store_context(store);
+	proxy_ctx.engine = engine;
+	proxy_ctx.wasm_ctx = context;
+	proxy_ctx.root_context_id = 1;
+	proxy_ctx.stream_context_id = 2;
+	proxy_ctx.module_name = entry->name;
+	proxy_ctx.vm_config = vm_config;
+	proxy_ctx.vm_config_len = vm_config_len;
+	proxy_ctx.plugin_config = plugin_config;
+	proxy_ctx.plugin_config_len = plugin_config_len;
+	proxy_ctx.shared_data = vwasm_proxy_wasm_get_shared_data();
+	proxy_ctx.queue_store = vwasm_proxy_wasm_get_queue_store();
+	proxy_ctx.metric_store = vwasm_proxy_wasm_get_metric_store();
+	wasmtime_context_set_data(context, &proxy_ctx);
+
 	wasmtime_context_set_epoch_deadline(context,
 	    vwasm_engine_get_epoch_deadline_ms(engine));
 	wasmtime_store_limiter(store,
@@ -84,6 +101,23 @@ vwasm_warm_instance_create(struct vwasm_warm_instance *warm,
 	    context, &instance, &trap);
 	if (error != NULL || trap != NULL)
 		goto fail;
+
+	/* Resolve memory and allocator before lifecycle callbacks. */
+	if (wasmtime_instance_export_get(context, &instance,
+	    "memory", 6, &item) && item.kind == WASMTIME_EXTERN_MEMORY) {
+		proxy_ctx.memory = item.of.memory;
+		proxy_ctx.memory_valid = 1;
+	}
+	if (wasmtime_instance_export_get(context, &instance,
+	    "proxy_on_memory_allocate", 24, &item) &&
+	    item.kind == WASMTIME_EXTERN_FUNC) {
+		proxy_ctx.allocator = item.of.func;
+		proxy_ctx.allocator_valid = 1;
+	} else if (wasmtime_instance_export_get(context, &instance,
+	    "malloc", 6, &item) && item.kind == WASMTIME_EXTERN_FUNC) {
+		proxy_ctx.allocator = item.of.func;
+		proxy_ctx.allocator_valid = 1;
+	}
 
 	/* Probe exports and set presence flags */
 	warm->has_initialize = wasmtime_instance_export_get(context,
@@ -221,6 +255,7 @@ vwasm_warm_instance_create(struct vwasm_warm_instance *warm,
 	warm->memory_pages = wasmtime_memory_size(context, &item.of.memory);
 	warm->valid = 1;
 
+	vwasm_proxy_ctx_cleanup(&proxy_ctx);
 	wasmtime_store_delete(store);
 	return (0);
 
@@ -229,6 +264,7 @@ fail:
 		wasmtime_error_delete(error);
 	if (trap != NULL)
 		wasm_trap_delete(trap);
+	vwasm_proxy_ctx_cleanup(&proxy_ctx);
 	if (store != NULL)
 		wasmtime_store_delete(store);
 	warm->valid = 0;

@@ -365,6 +365,7 @@ pw_proxy_add_header_map_value(void *env, wasmtime_caller_t *caller,
 	struct vwasm_proxy_ctx *ctx;
 	struct http *hp;
 	char key_buf[256], val_buf[4096], hdr_line[4352];
+	const char *ws_hdr;
 	int32_t map_type;
 
 	(void)env;
@@ -407,8 +408,13 @@ pw_proxy_add_header_map_value(void *env, wasmtime_caller_t *caller,
 	}
 
 	snprintf(hdr_line, sizeof(hdr_line), "%s: %s", key_buf, val_buf);
-	http_SetHeader(hp,
-	    WS_Copy(ctx->vrt_ctx->ws, hdr_line, (int)(strlen(hdr_line) + 1)));
+	ws_hdr = WS_Copy(ctx->vrt_ctx->ws, hdr_line,
+	    (int)(strlen(hdr_line) + 1));
+	if (ws_hdr == NULL) {
+		results[0].of.i32 = PROXY_INTERNAL;
+		return (NULL);
+	}
+	http_SetHeader(hp, ws_hdr);
 
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);
@@ -426,6 +432,7 @@ pw_proxy_replace_header_map_value(void *env, wasmtime_caller_t *caller,
 	struct vwasm_proxy_ctx *ctx;
 	struct http *hp;
 	char key_buf[256], val_buf[4096], hdr_search[260], hdr_line[4352];
+	const char *ws_hdr;
 	int i;
 	int32_t map_type;
 
@@ -473,8 +480,13 @@ pw_proxy_replace_header_map_value(void *env, wasmtime_caller_t *caller,
 	}
 
 	snprintf(hdr_line, sizeof(hdr_line), "%s: %s", key_buf, val_buf);
-	http_SetHeader(hp,
-	    WS_Copy(ctx->vrt_ctx->ws, hdr_line, (int)(strlen(hdr_line) + 1)));
+	ws_hdr = WS_Copy(ctx->vrt_ctx->ws, hdr_line,
+	    (int)(strlen(hdr_line) + 1));
+	if (ws_hdr == NULL) {
+		results[0].of.i32 = PROXY_INTERNAL;
+		return (NULL);
+	}
+	http_SetHeader(hp, ws_hdr);
 
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);
@@ -783,7 +795,7 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 				break;
 			}
 		}
-	} else if (map_type == 1) {
+	} else if (map_type == PROXY_MAP_HTTP_RESPONSE_HEADERS) {
 		if (hp->hd[HTTP_HDR_STATUS].b != NULL) {
 			pseudo_keys[num_pseudo] = ":status";
 			pseudo_vals[num_pseudo] = hp->hd[HTTP_HDR_STATUS].b;
@@ -951,6 +963,7 @@ pw_proxy_set_header_map_pairs(void *env, wasmtime_caller_t *caller,
 	uint32_t map_type, data_ptr, data_size;
 	uint32_t num_pairs, i, offset;
 	char hdr_line[4352];
+	const char *ws_hdr;
 
 	(void)env;
 	(void)nargs;
@@ -1050,7 +1063,13 @@ pw_proxy_set_header_map_pairs(void *env, wasmtime_caller_t *caller,
 		if (key_size > 0 && key_size < 256 && val_size < 4096) {
 			snprintf(hdr_line, sizeof(hdr_line), "%.*s: %.*s",
 			    (int)key_size, key, (int)val_size, val);
-			http_SetHeader(hp, hdr_line);
+			ws_hdr = WS_Copy(ctx->vrt_ctx->ws, hdr_line,
+			    (int)(strlen(hdr_line) + 1));
+			if (ws_hdr == NULL) {
+				results[0].of.i32 = PROXY_INTERNAL;
+				return (NULL);
+			}
+			http_SetHeader(hp, ws_hdr);
 		}
 	}
 
@@ -1072,6 +1091,7 @@ pw_proxy_get_header_map_size(void *env, wasmtime_caller_t *caller,
 	struct vwasm_proxy_ctx *ctx;
 	int32_t map_type;
 	uint32_t count = 0;
+	uint32_t i;
 
 	(void)env;
 	(void)nargs;
@@ -1089,8 +1109,26 @@ pw_proxy_get_header_map_size(void *env, wasmtime_caller_t *caller,
 			count = tm->count;
 	} else {
 		const struct http *hp = pw_get_header_map(ctx, map_type);
-		if (hp != NULL)
+		if (hp != NULL) {
 			count = (uint32_t)(hp->nhd - HTTP_HDR_FIRST);
+			if (map_type == PROXY_MAP_HTTP_REQUEST_HEADERS) {
+				if (hp->hd[HTTP_HDR_METHOD].b != NULL)
+					count++;
+				if (hp->hd[HTTP_HDR_URL].b != NULL)
+					count++;
+				for (i = HTTP_HDR_FIRST; i < hp->nhd; i++) {
+					if (hp->hd[i].b != NULL &&
+					    strncasecmp(hp->hd[i].b, "Host:",
+					    5) == 0) {
+						count++;
+						break;
+					}
+				}
+			} else if (map_type == PROXY_MAP_HTTP_RESPONSE_HEADERS &&
+			    hp->hd[HTTP_HDR_STATUS].b != NULL) {
+				count++;
+			}
+		}
 	}
 
 	if (pw_write_u32(ctx, (uint32_t)args[1].of.i32, count) != 0) {

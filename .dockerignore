@@ -3,6 +3,11 @@
 **/vendor
 .libs
 .deps
+**/.libs
+**/.deps
+*.lo
+*.la
+*.o
 autom4te.cache
 aclocal.m4
 config.h

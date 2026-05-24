@@ -79,6 +79,7 @@ EXTRA_DIST = \
 	tests/proxy_wasm_sdk.vtc \
 	tests/proxy_wasm_security.vtc \
 	tests/resource_config.vtc \
+	tests/vcl_reload_lifecycle.vtc \
 	tests/wasm/test_module.wasm
 
 # Unit tests cannot link standalone against the VMOD because Varnish internal

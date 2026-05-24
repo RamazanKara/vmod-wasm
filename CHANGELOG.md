@@ -2,6 +2,27 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [4.3.3] - 2026-05-24
+
+### Fixed
+- Isolated Wasm engines per loaded VCL so VCL reloads and discards no longer
+  tear down modules still owned by another active VCL.
+- Reordered engine shutdown so tick timers, store pools, warm instances, and
+  HTTP pools are destroyed before Wasmtime modules and the Wasmtime engine.
+- Hardened HTTP connection pooling by applying socket I/O timeouts and refusing
+  to reuse pooled sockets with unread stale data.
+- Initialized Proxy-Wasm warm lifecycle calls with a real host context, memory,
+  allocator, shared data, queue store, and metric store.
+- Copied Proxy-Wasm header and request-property mutations into Varnish
+  workspace before passing them to Varnish HTTP APIs.
+- Fixed Proxy-Wasm header-map size reporting for request and response pseudo
+  headers.
+- Rejected duplicate module names in a VCL-local engine and cleaned up failed
+  module loads more defensively.
+
+### Tests
+- Added VTC coverage for VCL reload lifecycle isolation.
+
 ## [4.3.2] - 2026-05-24
 
 ### Fixed

@@ -583,6 +583,7 @@ wasi_fd_write(void *env, wasmtime_caller_t *caller,
 
 	(void)env;
 	(void)nargs;
+	(void)nresults;
 
 	ctx = wasmtime_caller_context(caller);
 	hctx = (struct vwasm_host_ctx *)wasmtime_context_get_data(ctx);
@@ -899,6 +900,7 @@ wasi_proc_exit(void *env, wasmtime_caller_t *caller,
 	(void)caller;
 	(void)args;
 	(void)nargs;
+	(void)results;
 	(void)nresults;
 	/* Trap instead of exiting the process */
 	return (wasmtime_trap_new("wasi proc_exit called", 21));
