@@ -34,7 +34,7 @@
 #include "proxy_wasm.h"
 #include "vdp_wasm.h"
 
-#define VMOD_WASM_VERSION "4.3.3"
+#define VMOD_WASM_VERSION "4.3.4"
 
 /* One Wasm engine per loaded VCL. */
 struct vmod_wasm_vcl {

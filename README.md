@@ -120,9 +120,9 @@ make install
 
 ### Release Bundles
 
-GitHub releases use Varnish-specific tags such as `varnish9-v4.3.3` so the
+GitHub releases use Varnish-specific tags such as `varnish9-v4.3.4` so the
 supported Varnish ABI line is visible before download. The package version
-remains semantic (`4.3.3`), while the release channel identifies Varnish 9.
+remains semantic (`4.3.4`), while the release channel identifies Varnish 9.
 
 Release assets include source and convenience binary bundles for Linux `amd64`
 and `arm64` on Varnish 9. Binary bundles include `libvmod_wasm.so`,

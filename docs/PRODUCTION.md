@@ -147,7 +147,7 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 
 ## Deployment Checklist
 
-- [ ] Verify the release tag matches your Varnish ABI line, for example `varnish9-v4.3.3`
+- [ ] Verify the release tag matches your Varnish ABI line, for example `varnish9-v4.3.4`
 - [ ] Confirm `ldd libvmod_wasm.so` resolves the intended bundled `libwasmtime.so`
 - [ ] Set `set_epoch_deadline()` appropriate for expected module latency
 - [ ] Set `set_memory_limit()` (16 MiB default is usually fine)

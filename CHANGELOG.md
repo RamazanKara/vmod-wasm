@@ -2,7 +2,7 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
-## [Unreleased]
+## [4.3.4] - 2026-05-24
 
 ### Changed
 - Refactored release, production, development, architecture, compatibility, and
