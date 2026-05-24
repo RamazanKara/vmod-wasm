@@ -2,6 +2,27 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [4.3.2] - 2026-05-24
+
+### Fixed
+- Hardened `proxy_http_call` request parsing by rejecting malformed serialized
+  header maps, invalid methods/paths, bad upstream ports, and CRLF/control
+  injection in guest-supplied headers.
+- Fixed a response-buffer boundary bug where a full 256 KiB callout response
+  could write the trailing NUL byte one byte past the allocation.
+- Switched outbound callout writes to retry until the complete request and body
+  are sent, avoiding partial-write truncation.
+- Fail closed for oversized, malformed, incomplete, or chunked callout responses
+  instead of storing a partial response.
+- Apply private/internal IP rejection consistently through both direct HTTP
+  connections and the HTTP connection pool.
+- Return pooled callout connections for reuse only after a complete,
+  `Content-Length` framed HTTP/1.1 response.
+
+### Tests
+- Added VTC coverage for oversized auth callout responses failing closed with
+  the HTTP connection pool enabled.
+
 ## [4.3.1] - 2026-05-23
 
 ### Release Channel

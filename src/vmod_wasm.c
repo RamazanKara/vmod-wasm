@@ -34,7 +34,7 @@
 #include "proxy_wasm.h"
 #include "vdp_wasm.h"
 
-#define VMOD_WASM_VERSION "4.3.1"
+#define VMOD_WASM_VERSION "4.3.2"
 
 /* Global Wasm engine — shared across all VCL instances and threads */
 static struct vwasm_engine *vwasm_engine_global = NULL;
