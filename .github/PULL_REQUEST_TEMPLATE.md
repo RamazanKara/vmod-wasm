@@ -6,6 +6,8 @@ Describe the change and why it is needed.
 
 - [ ] `make lint`
 - [ ] `make test`
+- [ ] `make audit` when Rust dependencies changed
+- [ ] `make soak-test` for lifecycle, pooling, reload, or concurrency changes
 - [ ] `make release-dry-run` for release-impacting changes
 
 ## Checklist

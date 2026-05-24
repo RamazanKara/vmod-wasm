@@ -7,6 +7,7 @@ labels: bug
 ## Environment
 
 - vmod-wasm version:
+- Release tag or commit SHA:
 - Varnish version:
 - Wasmtime version:
 - OS/architecture:
@@ -14,6 +15,9 @@ labels: bug
 ## Reproduction
 
 Steps, VCL, Wasm module, or VTC test case that reproduces the issue.
+
+Include the relevant `vcl_init` configuration and whether the module uses
+Proxy-Wasm HTTP callouts, response body filtering, or VCL reloads.
 
 ## Expected Behavior
 

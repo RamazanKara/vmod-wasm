@@ -2,6 +2,18 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- Refactored release, production, development, architecture, compatibility, and
+  security documentation around the Varnish 9 release contract.
+- Documented current runtime defaults, per-VCL engine lifetime, bundled
+  Wasmtime install expectations, and soak-test workflow.
+
+### Fixed
+- Enforced `wasm.set_fail_mode("open")` in VMOD execution return paths so
+  documented fail-open behavior returns `0` on Wasm execution errors.
+
 ## [4.3.3] - 2026-05-24
 
 ### Fixed

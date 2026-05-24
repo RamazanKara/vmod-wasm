@@ -2,11 +2,26 @@
 
 Complete reference for all vmod-wasm VCL functions and their parameters.
 
+## Support And Scope
+
+The stable release line targets Varnish 9.x with Wasmtime C API 44.0.0.
+Configuration functions that change engine state are restricted to `vcl_init`,
+matching Varnish's expectation that loaded VCL objects become immutable on the
+request path.
+
+| Function group | VCL scope |
+|----------------|-----------|
+| Module loading and resource/security setters | `vcl_init` |
+| Raw execution and request Proxy-Wasm functions | client side |
+| Response Proxy-Wasm functions | `vcl_backend_response`, `vcl_deliver` |
+| Stats, metrics, and version getters | any valid VCL context |
+
 ## Module Management
 
 ### `wasm.load(name, path)`
 
-Load and compile a WebAssembly module.
+Load and compile a WebAssembly module into the current VCL's Wasmtime engine.
+Module names must be unique within that loaded VCL.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -14,6 +29,8 @@ Load and compile a WebAssembly module.
 | `path` | STRING | Absolute path to the `.wasm` file |
 
 **Returns**: void (errors logged to VSL)
+
+**Scope**: `vcl_init`
 
 **Example**:
 ```vcl
@@ -41,7 +58,9 @@ Call an exported function from a raw (non-proxy-wasm) module.
 | `module` | STRING | Module name (from `wasm.load`) |
 | `func` | STRING | Exported function name |
 
-**Returns**: INT (the function's i32 return value, or -1 on error)
+**Returns**: INT (the function's i32 return value, or `-1` on error)
+
+**Scope**: client side
 
 ### `wasm.proxy_wasm_on_request(module)`
 
@@ -51,7 +70,9 @@ Run the Proxy-Wasm request lifecycle (headers + body).
 |-----------|------|-------------|
 | `module` | STRING | Module name |
 
-**Returns**: INT (0 = continue, positive status = local response, -1 = error)
+**Returns**: INT (`0` = continue, positive status = local response, `-1` = error)
+
+**Scope**: client side
 
 ### `wasm.proxy_wasm_on_response(module)`
 
@@ -61,7 +82,9 @@ Run the Proxy-Wasm response lifecycle (headers).
 |-----------|------|-------------|
 | `module` | STRING | Module name |
 
-**Returns**: INT (0 = continue, positive status = local response, -1 = error)
+**Returns**: INT (`0` = continue, positive status = local response, `-1` = error)
+
+**Scope**: `vcl_backend_response`, `vcl_deliver`
 
 ### `wasm.proxy_wasm_on_request_configured(module, vm_config, plugin_config)`
 
@@ -73,7 +96,9 @@ Run request lifecycle with explicit configuration.
 | `vm_config` | STRING | VM-level configuration (passed to `on_vm_start`) |
 | `plugin_config` | STRING | Plugin configuration (passed to `on_configure`) |
 
-**Returns**: INT (0 = continue, positive status = local response, -1 = error)
+**Returns**: INT (`0` = continue, positive status = local response, `-1` = error)
+
+**Scope**: client side
 
 ### `wasm.proxy_wasm_on_response_configured(module, vm_config, plugin_config)`
 
@@ -85,7 +110,9 @@ Run response lifecycle with explicit configuration.
 | `vm_config` | STRING | VM-level configuration |
 | `plugin_config` | STRING | Plugin configuration |
 
-**Returns**: INT (0 = continue, positive status = local response, -1 = error)
+**Returns**: INT (`0` = continue, positive status = local response, `-1` = error)
+
+**Scope**: `vcl_backend_response`, `vcl_deliver`
 
 ---
 
@@ -97,9 +124,14 @@ Set maximum wall-clock execution time per Wasm invocation.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `ms` | INT | 100 | Milliseconds before execution is interrupted |
+| `ms` | INT | 5000 | Milliseconds before execution is interrupted |
 
-**Behavior**: Exceeding the deadline causes a Wasm trap; the function returns -1 (error).
+**Behavior**: Exceeding the deadline causes a Wasm trap; the VMOD call returns
+`-1` (error). The default is intentionally conservative. Production filters
+should set an explicit lower deadline, usually 50-500ms depending on module
+latency and whether callouts are used.
+
+**Scope**: `vcl_init`
 
 ### `wasm.get_epoch_deadline()`
 
@@ -112,6 +144,8 @@ Set maximum linear memory a Wasm module can allocate.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `bytes` | INT | 16777216 (16 MiB) | Maximum memory in bytes |
+
+**Scope**: `vcl_init`
 
 ### `wasm.get_memory_limit()`
 
@@ -128,7 +162,7 @@ Pre-warm a fixed number of Wasmtime stores for a loaded module.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `module` | STRING | Module name (from `wasm.load`) |
-| `size` | INT | Number of stores to pre-warm (1-256) |
+| `size` | INT | Number of stores to pre-warm (1-256; default 8 if not set) |
 
 Call this from `vcl_init` after `wasm.load()`.
 
@@ -138,13 +172,18 @@ Set the maximum number of persistent HTTP callout connections.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `size` | INT | Maximum pooled HTTP connections |
+| `size` | INT | Maximum pooled HTTP connections (1-1024; default 16 if not set) |
+
+Call this from `vcl_init`. The pool is shared by Proxy-Wasm HTTP callouts in
+the current loaded VCL.
 
 ### `wasm.filter_chain(chain_spec)`
 
 Run a request-side chain of modules separated by `|`.
 
-**Returns**: INT (0 = success, -1 = error)
+**Returns**: INT (`0` = success, `-1` = error)
+
+**Scope**: client side
 
 **Example**:
 ```vcl
@@ -157,7 +196,9 @@ if (wasm.filter_chain("rate_limit|auth|transform") != 0) {
 
 Run a response-side chain of modules separated by `|`.
 
-**Returns**: INT (0 = success, -1 = error)
+**Returns**: INT (`0` = success, `-1` = error)
+
+**Scope**: `vcl_backend_response`, `vcl_deliver`
 
 ---
 
@@ -169,9 +210,11 @@ Restrict which backends Wasm modules can reach via `proxy_http_call`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `list` | STRING | "" (allow all) | Comma-separated `host:port` entries |
+| `list` | STRING | unset/empty (allow all) | Comma-separated `host:port` entries |
 
-**Production recommendation**: Always set this. An empty list allows all upstreams (dangerous).
+**Production recommendation**: Always set this when modules can use HTTP
+callouts. An unset or empty list allows all non-private upstreams that pass the
+SSRF checks, which is too broad for production.
 
 **Example**:
 ```vcl
@@ -186,6 +229,8 @@ Maximum HTTP callouts per request per Wasm execution.
 |-----------|------|---------|-------------|
 | `limit` | INT | 5 | Max callouts (0 = disable callouts entirely) |
 
+**Scope**: `vcl_init`
+
 ### `wasm.set_fail_mode(mode)`
 
 Behavior when Wasm execution encounters an error.
@@ -196,6 +241,8 @@ Behavior when Wasm execution encounters an error.
 
 - **closed**: Errors return -1, allowing VCL to block the request
 - **open**: Errors silently return 0 (continue), request proceeds
+
+**Scope**: `vcl_init`
 
 ---
 
@@ -246,7 +293,7 @@ sub vcl_init {
     wasm.load("edge", "/etc/varnish/wasm/edge_security_filter.wasm");
 
     # Execution limits
-    wasm.set_epoch_deadline(100);       # 100ms — fast security filter
+    wasm.set_epoch_deadline(100);       # fast security filter
     wasm.set_memory_limit(8388608);     # 8 MiB — sufficient for most filters
 
     # Security

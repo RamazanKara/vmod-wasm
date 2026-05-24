@@ -215,7 +215,7 @@ jobs:
               f"- Varnish: 9.x, validated with `varnish:{varnish_version}`",
               f"- Wasmtime: {wasmtime_version}, bundled in binary tarballs",
               "- Platforms: linux/amd64 and linux/arm64",
-              "- VCL API: no compatibility break from v4.3.0",
+              "- VCL API: no compatibility break within the 4.3.x stable line",
               "",
               "## Changes",
               changelog,

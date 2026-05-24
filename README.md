@@ -11,9 +11,9 @@ A Varnish VMOD that executes WebAssembly modules for HTTP request processing at 
 
 ## Overview
 
-vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) runtime into Varnish Cache, allowing you to write edge logic in **Rust**, **Go**, or **AssemblyScript**, compile to WebAssembly, and execute it during request processing.
+vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) runtime into Varnish Cache 9.x, allowing you to write edge logic in **Rust**, **Go**, or **AssemblyScript**, compile it to WebAssembly, and execute it during request/response processing.
 
-Includes a full [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) implementation for running standard Wasm filters on Varnish.
+It includes a [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) implementation for running standard Wasm filters on Varnish, plus a raw host-function path for small purpose-built modules.
 
 ## Features
 
@@ -28,6 +28,7 @@ Includes a full [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) impl
 - HTTP connection pooling with circuit breaker for outbound calls
 - Streaming response body inspection via VDP
 - SSRF prevention (upstream allowlist + IP rebinding protection)
+- One Wasmtime engine per loaded VCL for safe VCL reload and discard lifecycles
 
 ## Quick Start
 
@@ -36,7 +37,7 @@ import wasm;
 
 sub vcl_init {
     wasm.load("my_filter", "/etc/varnish/wasm/filter.wasm");
-    wasm.set_epoch_deadline(100);    # 100ms execution limit
+    wasm.set_epoch_deadline(100);    # explicit production execution limit
     wasm.set_memory_limit(8388608);  # 8 MiB
 }
 
@@ -111,7 +112,7 @@ For host function signatures and Proxy-Wasm ABI coverage, see
 
 ```bash
 ./autogen.sh
-./configure
+./configure --with-wasmtime=/opt/wasmtime
 make
 make check
 make install
@@ -128,12 +129,20 @@ and `arm64` on Varnish 9. Binary bundles include `libvmod_wasm.so`,
 `libwasmtime.so`, notices, checksums, and an install note. Source builds remain
 the authoritative path for custom Varnish installations.
 
+The current stable release line is `4.3.x` for Varnish 9.x. Binary assets are
+published for Linux `amd64` and `arm64`.
+
 ### Docker
 
 ```bash
-docker build -t vmod-wasm-dev .
-docker run --rm vmod-wasm-dev make check
+docker build -t vmod-wasm-ci .
+docker run --rm vmod-wasm-ci make check
+docker run --rm vmod-wasm-ci make distcheck DISTCHECK_CONFIGURE_FLAGS="--with-wasmtime=/opt/wasmtime"
 ```
+
+For longer lifecycle and reload testing, run `make soak-test`. Logs are written
+under `soak-logs/` and include client errors, reload errors, Varnish error logs,
+and key `varnishstat` counters.
 
 ## Documentation
 

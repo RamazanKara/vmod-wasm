@@ -46,10 +46,12 @@ $Function VOID set_epoch_deadline(INT ms)
 
 $Restrict vcl_init
 
-Set epoch-based execution deadline in milliseconds. Default 100ms.
-Runaway modules (infinite loops) are interrupted after this duration. Example::
+Set epoch-based execution deadline in milliseconds. Default 5000ms.
+Runaway modules (infinite loops) are interrupted after this duration. Production
+filters should normally set a smaller explicit value based on expected latency.
+Example::
 
-    wasm.set_epoch_deadline(50);
+    wasm.set_epoch_deadline(100);
 
 $Function INT get_epoch_deadline()
 
@@ -130,7 +132,8 @@ $Function VOID set_store_pool_size(STRING module, INT size)
 $Restrict vcl_init
 
 Set number of pre-warmed stores for a module. Larger pools reduce instantiation
-latency under concurrency. Must be called after load(). Example::
+latency under concurrency. Default 8; valid range 1-256. Must be called after
+load(). Example::
 
     wasm.set_store_pool_size("auth", 32);
 
@@ -138,7 +141,8 @@ $Function VOID set_http_pool_size(INT size)
 
 $Restrict vcl_init
 
-Set maximum number of persistent HTTP connections in the pool. Example::
+Set maximum number of persistent HTTP connections in the pool. Default 16;
+valid range 1-1024. Example::
 
     wasm.set_http_pool_size(64);
 

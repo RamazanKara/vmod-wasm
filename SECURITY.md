@@ -10,6 +10,7 @@ Security fixes are provided for the latest stable release line.
 | < 4.3 | No |
 
 The public release support target is Varnish 9.x on Linux amd64 and arm64.
+Stable release tags use the `varnish9-vX.Y.Z` format.
 
 ## Reporting A Vulnerability
 

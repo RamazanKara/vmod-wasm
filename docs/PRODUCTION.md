@@ -11,13 +11,37 @@ GitHub binary bundles include the Wasmtime 44.0.0 runtime library used at build
 time. Keep `libvmod_wasm.so` and the bundled `libwasmtime.so` together, or set
 `LD_LIBRARY_PATH` so `varnishd` can resolve `libwasmtime.so` at startup.
 
+## Installing Release Bundles
+
+Binary release bundles are convenience artifacts for Varnish 9 users. Each one
+contains:
+
+- `libvmod_wasm.so`
+- bundled `libwasmtime.so`
+- BSD-2-Clause license text and third-party notices
+- concise install/runtime notes
+
+Install both shared libraries into paths visible to `varnishd`. If you keep the
+bundle layout intact, set the service environment so the dynamic loader can find
+the bundled Wasmtime library:
+
+```bash
+export LD_LIBRARY_PATH=/opt/vmod-wasm/lib:${LD_LIBRARY_PATH}
+```
+
+Then verify linkage before traffic:
+
+```bash
+ldd /usr/lib/varnish/vmods/libvmod_wasm.so | grep libwasmtime
+```
+
 ## Resource Limits
 
 ### Epoch Deadline (Execution Time Limit)
 
 ```vcl
 sub vcl_init {
-    wasm.set_epoch_deadline(100);  # Default: 100ms
+    wasm.set_epoch_deadline(100);  # explicit production deadline
 }
 ```
 
@@ -25,7 +49,8 @@ sub vcl_init {
 - Prevents infinite loops and runaway computations
 - Based on epoch-based interruption (low overhead, no per-instruction cost)
 - Exceeding the deadline causes a trap; execution returns -1 (error)
-- Set based on expected module latency: fast filters 50ms, complex logic 200ms
+- Built-in default is 5000ms; production VCL should set a smaller explicit value
+- Set based on expected module latency: fast filters 50ms, complex logic 200-500ms
 
 ### Memory Limit
 
@@ -51,7 +76,8 @@ sub vcl_init {
 
 - **REQUIRED for production**: Restricts which backends Wasm modules can call via `proxy_http_call`
 - Prevents SSRF attacks by limiting callout destinations
-- If not set, ALL upstreams are allowed (dangerous in production)
+- If not set, all non-private destinations that pass SSRF checks are allowed
+  (too broad for production)
 - Format: comma-separated `host:port` entries
 
 ### HTTP Call Rate Limit
@@ -121,6 +147,8 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 
 ## Deployment Checklist
 
+- [ ] Verify the release tag matches your Varnish ABI line, for example `varnish9-v4.3.3`
+- [ ] Confirm `ldd libvmod_wasm.so` resolves the intended bundled `libwasmtime.so`
 - [ ] Set `set_epoch_deadline()` appropriate for expected module latency
 - [ ] Set `set_memory_limit()` (16 MiB default is usually fine)
 - [ ] **Set `set_allowed_upstreams()`** if module uses HTTP callouts
@@ -128,12 +156,14 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 - [ ] Set `set_fail_mode("closed")` for security filters
 - [ ] Expose `/__wasm_metrics` endpoint for monitoring
 - [ ] Test Wasm modules with `varnishtest` before deployment
+- [ ] Run a soak or canary test for VCL reload, pooling, and sustained traffic changes
 - [ ] Monitor `SLT_Error` logs for Wasm execution failures
 
 ## Performance Considerations
 
 - Wasm modules are compiled once at `vcl_init` — instantiation is cheap
-- Each request gets its own Wasm instance (no shared state between requests)
+- Each loaded VCL owns its own Wasmtime engine and compiled module set
+- Each request gets an isolated Wasm instance/store (no linear-memory leakage between requests)
 - Epoch-based time limits have near-zero overhead (no per-instruction cost)
 - Memory limit enforcement is near-zero cost (page fault based)
 - HTTP callouts are synchronous — keep timeouts short
@@ -174,8 +204,40 @@ varnishadm vcl.use reload_1
 varnishadm vcl.discard boot
 ```
 
-The old VCL (and its Wasm modules) remains active until all in-flight
-requests complete. No requests are dropped during the transition.
+The old VCL and its Wasm engine remain active until all in-flight requests
+complete and Varnish discards the VCL. On discard, vmod-wasm unregisters the
+VDP filter, stops tick timers, destroys store and HTTP pools, and only then
+deletes Wasmtime modules and the engine. No requests are dropped during the
+transition.
+
+### Canary And Soak Testing
+
+Before promoting a new module or VMOD release, run a short canary and at least
+one soak that exercises VCL reloads:
+
+```bash
+make soak-test
+```
+
+For a longer local run:
+
+```bash
+scripts/soak-test.sh \
+  --duration 21600 \
+  --concurrency 16 \
+  --reload-interval 60 \
+  --sample-interval 30
+```
+
+Check the resulting `soak-logs/<timestamp>/` directory for:
+
+- zero client errors and zero reload errors
+- empty Varnish error log
+- no bad worker response files
+- `MGT.child_panic = 0`
+- `MGT.child_died = 0`
+- `MAIN.backend_fail = 0`
+- `MAIN.threads_failed = 0`
 
 ### Graceful Degradation
 
@@ -249,18 +311,20 @@ sub vcl_recv {
 
 ### Memory Budget
 
-Per Varnish worker thread, vmod-wasm allocates:
+Per loaded VCL, vmod-wasm allocates:
 
 | Component | Memory | Notes |
 |-----------|--------|-------|
-| Wasm linear memory | Up to `memory_limit` per instance | Default 16 MiB |
-| Store pool instance | ~2-4 KiB overhead | Per-thread pre-allocation |
-| Compiled module | ~1-5 MiB (shared) | Single copy, all threads share |
-| HTTP connection pool | ~64 KiB per thread | Connection state + buffers |
+| Wasm linear memory | Up to `memory_limit` per active or pooled instance | Default 16 MiB |
+| Store pool instances | `store_pool_size * memory_limit` worst case per module | Default 8 stores |
+| Compiled module | ~1-5 MiB per module | Shared within one VCL engine |
+| HTTP connection pool | up to `http_pool_size` sockets + buffers | Default 16 connections |
 
-**Formula**: `total_wasm_memory = num_threads × memory_limit + compiled_module_size`
+**Formula**:
+`total_wasm_memory ~= loaded_vcls * modules * store_pool_size * memory_limit + compiled_module_size`
 
-With 32 threads and 8 MiB limit: `32 × 8 MiB + 3 MiB ≈ 259 MiB`
+During VCL reloads, old and new VCLs may overlap until in-flight traffic drains,
+so budget for at least two loaded VCL generations during deployment.
 
 ### CPU Budget
 
@@ -287,7 +351,7 @@ With 32 threads and 8 MiB limit: `32 × 8 MiB + 3 MiB ≈ 259 MiB`
 5. Monitor logs for errors
 6. Discard old VCL: `varnishadm vcl.discard old_vcl`
 
-## Performance Considerations
+## Store Pool Performance
 
 ### Store Pool Memory Snapshots
 

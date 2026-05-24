@@ -23,6 +23,8 @@ This document describes the security boundaries and controls.
 - Upstream allowlist (`set_allowed_upstreams`) restricts destinations
 - Rate limit (`set_http_call_limit`) prevents amplification
 - DNS resolution uses the host's resolver (no custom DNS)
+- Resolved private/internal IPs are rejected unless the exact `host:port` was
+  explicitly allowlisted as a trusted upstream
 
 ## Threat Model
 
@@ -43,9 +45,9 @@ This document describes the security boundaries and controls.
 
 | Control | Default | Recommendation |
 |---------|---------|---------------|
-| Epoch deadline | 100ms | Set per expected module latency |
+| Epoch deadline | 5000ms | Set a smaller explicit value per expected module latency |
 | Memory limit | 16 MiB | Keep at 16 MiB unless needed |
-| Upstream allowlist | Allow all | **Always set in production** |
+| Upstream allowlist | Allow all non-private destinations | **Always set in production** |
 | HTTP call limit | 5 | 3-5 for most use cases |
 | Fail mode | closed | Keep closed for security filters |
 
@@ -58,7 +60,7 @@ following security considerations:
 - `proxy_get_header_map_value`: Read-only access to request/response headers
 - `proxy_add_header_map_value`: Can only add to the current request/response
 - `proxy_get_header_map_pairs`: Returns all headers including pseudo-headers
-- Pseudo-headers (`:method`, `:path`, `:authority`) are writable via `proxy_set_property`
+- Request pseudo-headers (`:method`, `:path`, `:authority`) can be changed via `proxy_set_property`
 - `:status` is read-only
 
 ### Body Access
@@ -67,9 +69,10 @@ following security considerations:
 - Body modification is per-request, not persistent
 
 ### Property Access
-- `proxy_get_property`: Read-only access to connection metadata
+- `proxy_get_property`: Read access to request, response, connection, and node metadata
 - Available properties: `request.*`, `response.*`, `source.*`, `destination.*`, `node.*`
-- No write access to properties
+- `proxy_set_property`: Write access is limited to `request.path`, `request.method`, and `request.host`
+- Response status and connection/node properties are read-only
 
 ### Shared Data
 - `proxy_get_shared_data` / `proxy_set_shared_data`: Thread-safe key-value store

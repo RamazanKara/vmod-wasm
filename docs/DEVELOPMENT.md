@@ -197,11 +197,11 @@ impl HttpContext for MyFilter {
     fn on_http_request_headers(&mut self, _num_headers: usize, _end_of_stream: bool) -> Action {
         if let Some(token) = self.get_http_request_header("authorization") {
             self.dispatch_http_call(
-                "auth-backend",          // upstream name in VCL backend config
+                "auth.internal:8080",    // must match set_allowed_upstreams()
                 vec![
                     (":method", "GET"),
                     (":path", "/validate"),
-                    (":authority", "auth.internal"),
+                    (":authority", "auth.internal:8080"),
                     ("authorization", &token),
                 ],
                 None,
@@ -259,9 +259,38 @@ VTC (Varnish Test Case) files test the module running inside actual Varnish:
 
 ```bash
 # Build everything and run tests in Docker
-docker build -t vmod-wasm-dev .
-docker run --rm vmod-wasm-dev make check
+docker build -t vmod-wasm-ci .
+docker run --rm vmod-wasm-ci make check
 ```
+
+For source distribution checks:
+
+```bash
+docker run --rm vmod-wasm-ci make distcheck DISTCHECK_CONFIGURE_FLAGS="--with-wasmtime=/opt/wasmtime"
+```
+
+### Soak Tests
+
+Use the soak harness for VCL lifecycle, reload, and sustained traffic changes:
+
+```bash
+make soak-test
+```
+
+For longer runs:
+
+```bash
+scripts/soak-test.sh \
+  --duration 21600 \
+  --concurrency 16 \
+  --reload-interval 60 \
+  --sample-interval 30
+```
+
+The harness writes logs under `soak-logs/<timestamp>/`. Review client errors,
+reload errors, Varnish error logs, bad worker responses, and counters such as
+`MGT.child_panic`, `MGT.child_died`, `MAIN.backend_fail`, and
+`MAIN.threads_failed`.
 
 ### Writing VTC Tests
 
@@ -305,7 +334,7 @@ import wasm;
 
 sub vcl_init {
     wasm.load("my_filter", "/etc/varnish/wasm/my_filter.wasm");
-    wasm.set_epoch_deadline(100);      # 100ms max execution
+    wasm.set_epoch_deadline(100);      # explicit production deadline
     wasm.set_memory_limit(8388608);    # 8 MiB max memory
     wasm.set_fail_mode("closed");      # Block on error
 }
@@ -320,6 +349,7 @@ sub vcl_init {
 - [ ] Use `fail_mode("closed")` for security-critical filters
 - [ ] Verify `.wasm` binary size is under 500 KiB
 - [ ] Test with `make check` before deploying
+- [ ] Run `make soak-test` for lifecycle, pooling, or reload changes
 
 ## Debugging
 

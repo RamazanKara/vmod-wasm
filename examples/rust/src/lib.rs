@@ -226,16 +226,16 @@ pub extern "C" fn block_bad_bot() -> i32 {
 
 // --- Phase 3: Execution safety test functions ---
 
+static mut SPIN_COUNTER: i64 = 0;
+
 /// Infinite loop — will be stopped by epoch deadline interruption.
 /// Should never actually return.
 #[no_mangle]
 pub extern "C" fn infinite_loop() -> i32 {
-    let mut i: i64 = 0;
-    loop {
-        i = i.wrapping_add(1);
-        // Prevent the compiler from optimizing this away
-        if i == i64::MIN {
-            return -1; // unreachable in practice
+    unsafe {
+        loop {
+            let i = core::ptr::read_volatile(core::ptr::addr_of!(SPIN_COUNTER));
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(SPIN_COUNTER), i.wrapping_add(1));
         }
     }
 }

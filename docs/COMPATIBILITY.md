@@ -5,6 +5,16 @@
 This document tracks the implementation status of the
 [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) specification.
 
+## Runtime Support
+
+| Component | Supported |
+|-----------|-----------|
+| Varnish | 9.x |
+| Wasmtime C API | 44.0.0 |
+| OS | Linux |
+| Architectures | `amd64`, `arm64` release bundles |
+| Release channel | `varnish9-vX.Y.Z` tags |
+
 ## Host Functions
 
 ### Logging
@@ -147,19 +157,24 @@ Response maps include:
 
 ## Limitations
 
-1. **Synchronous HTTP calls**: `proxy_http_call` blocks the Varnish worker thread
+1. **Varnish 9 only**: Stable releases target the Varnish 9 VMOD ABI. Older
+   Varnish lines are not part of the public support contract.
+
+2. **Synchronous HTTP calls**: `proxy_http_call` blocks the Varnish worker thread
    until the upstream responds or times out.
    `proxy_on_http_call_response` is then invoked immediately after
    `on_http_request_headers` returns (deferred callback pattern).
    The default timeout is 5 seconds with a 30 second cap. The module-supplied
    timeout takes priority if non-zero.
 
-2. **Anti-IP-rebinding**: HTTP calls reject resolved private/internal IPs
-   (RFC1918, RFC5735, RFC4193, loopback) to prevent SSRF.
+3. **Anti-IP-rebinding**: HTTP calls without an explicit allowlist entry reject
+   resolved private/internal IPs (RFC1918, RFC5735, RFC4193, loopback) to
+   reduce SSRF risk. Explicit allowlist entries are treated as trusted
+   destinations.
 
-3. **No gRPC support**: gRPC-specific features are not implemented.
+4. **No gRPC support**: gRPC-specific features are not implemented.
 
-4. **No L4 (TCP/UDP) support**: Only HTTP filter context is supported.
+5. **No L4 (TCP/UDP) support**: Only HTTP filter context is supported.
 
-5. **Single filter per execution**: Unlike Envoy's filter chain, each
+6. **Single filter per execution**: Unlike Envoy's filter chain, each
    `proxy_wasm_on_request()` call runs one module. Chain in VCL if needed.

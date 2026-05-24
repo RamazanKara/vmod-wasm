@@ -89,6 +89,15 @@ vmod_wasm_get_engine(VRT_CTX)
 	return (engine);
 }
 
+static VCL_INT
+vmod_wasm_error_result(struct vwasm_engine *engine)
+{
+	if (engine != NULL &&
+	    vwasm_engine_get_fail_mode(engine) == VWASM_FAIL_OPEN)
+		return (0);
+	return (-1);
+}
+
 /*
  * VMOD event handler — called on VCL lifecycle events.
  * LOAD: initialize the Wasm engine
@@ -231,7 +240,7 @@ vmod_execute(VRT_CTX, VCL_STRING name, VCL_STRING function)
 		VSLb(ctx->vsl, SLT_Error,
 		    "wasm.execute(): failed to call '%s' in module '%s'",
 		    function, name);
-		return (-1);
+		return (vmod_wasm_error_result(engine));
 	}
 
 	return (result);
@@ -357,7 +366,7 @@ vmod_proxy_wasm_on_request(VRT_CTX, VCL_STRING module)
 	ret = vwasm_proxy_wasm_call(engine, ctx,
 	    module, &status_code);
 	if (ret < 0)
-		return (-1);
+		return (vmod_wasm_error_result(engine));
 
 	/* If the filter called send_local_response, return the status code */
 	if (status_code > 0)
@@ -396,7 +405,7 @@ vmod_proxy_wasm_on_response(VRT_CTX, VCL_STRING module)
 	ret = vwasm_proxy_wasm_response_call(engine, ctx,
 	    module, &status_code);
 	if (ret < 0)
-		return (-1);
+		return (vmod_wasm_error_result(engine));
 
 	/* If the filter called send_local_response, return the status code */
 	if (status_code > 0)
@@ -434,7 +443,7 @@ vmod_proxy_wasm_on_request_configured(VRT_CTX, VCL_STRING module,
 	ret = vwasm_proxy_wasm_call_with_config(engine, ctx,
 	    module, vm_config, plugin_config, &status_code);
 	if (ret < 0)
-		return (-1);
+		return (vmod_wasm_error_result(engine));
 
 	if (status_code > 0)
 		return (status_code);
@@ -470,7 +479,7 @@ vmod_proxy_wasm_on_response_configured(VRT_CTX, VCL_STRING module,
 	ret = vwasm_proxy_wasm_response_call_with_config(engine,
 	    ctx, module, vm_config, plugin_config, &status_code);
 	if (ret < 0)
-		return (-1);
+		return (vmod_wasm_error_result(engine));
 
 	if (status_code > 0)
 		return (status_code);
@@ -790,6 +799,8 @@ vmod_filter_chain(VRT_CTX, VCL_STRING chain_spec)
 	    ctx, modules, nmodules, &status_code);
 
 	free(buf);
+	if (ret < 0)
+		return (vmod_wasm_error_result(engine));
 	return (ret);
 }
 
@@ -840,6 +851,8 @@ vmod_filter_chain_response(VRT_CTX, VCL_STRING chain_spec)
 	    ctx, modules, nmodules, &status_code);
 
 	free(buf);
+	if (ret < 0)
+		return (vmod_wasm_error_result(engine));
 	return (ret);
 }
 

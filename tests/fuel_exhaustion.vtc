@@ -2,12 +2,11 @@ varnishtest "vmod-wasm: epoch deadline stops runaway modules"
 
 # This test verifies:
 # 1. An infinite loop Wasm function is stopped by epoch-based interruption
-# 2. The request completes with an error (fail-open) instead of hanging
+# 2. The default fail-closed mode returns -1 instead of hanging
 # 3. Normal execution still works after a trapped execution
+# 4. fail_mode("open") converts execution lookup errors to 0
 
-server s1 {
-    rxreq
-    txresp -status 200 -body "OK"
+server s1 -repeat 3 {
     rxreq
     txresp -status 200 -body "OK"
 } -start
@@ -17,13 +16,13 @@ varnish v1 -vcl+backend {
 
     sub vcl_init {
         wasm.load("test", "${wasm_module}");
-        # Epoch deadline is configured by default (100ms).
-        # Infinite loops are stopped by epoch-based interruption.
+        # Set a short test deadline so the infinite loop traps quickly.
         wasm.set_epoch_deadline(50);
     }
 
     sub vcl_recv {
         set req.http.X-Wasm-Result = wasm.execute("test", req.http.X-Wasm-Func);
+        return (pass);
     }
 
     sub vcl_deliver {
@@ -42,8 +41,35 @@ client c1 {
 
 # Test 2: normal function still works after a trapped execution
 client c2 {
-    txreq -url "/" -hdr "X-Wasm-Func: get_constant"
+    txreq -url "/ok" -hdr "X-Wasm-Func: get_constant"
     rxresp
     expect resp.status == 200
     expect resp.http.X-Wasm-Result == "42"
+} -run
+
+varnish v2 -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("test", "${wasm_module}");
+        wasm.set_epoch_deadline(50);
+        wasm.set_fail_mode("open");
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Result = wasm.execute("test", req.http.X-Wasm-Func);
+        return (pass);
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Result = req.http.X-Wasm-Result;
+    }
+} -start
+
+# Test 3: fail-open maps execution lookup errors to continue (0)
+client c3 -connect ${v2_sock} {
+    txreq -url "/missing" -hdr "X-Wasm-Func: missing_export"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Wasm-Result == "0"
 } -run

@@ -82,8 +82,8 @@ make test
 Or directly with Docker:
 
 ```bash
-docker build -t vmod-wasm-dev .
-docker run --rm vmod-wasm-dev make check
+docker build -t vmod-wasm-ci .
+docker run --rm vmod-wasm-ci make check
 ```
 
 This builds vmod-wasm, compiles all example modules, and runs the full VTC integration test suite.

@@ -107,13 +107,36 @@ vcl_deliver
 
 ## Key Design Decisions
 
+### Per-VCL Engine Lifetime
+
+Each loaded VCL gets its own `vwasm_engine` and module registry. Varnish may keep
+old VCLs alive while in-flight requests drain, so vmod-wasm keeps the old
+Wasmtime engine, compiled modules, store pools, tick timers, and HTTP pool tied
+to that VCL until Varnish sends `VCL_EVENT_DISCARD`.
+
+This mirrors Varnish's normal hot-reload model:
+
+- `VCL_EVENT_LOAD`: create a new engine and register the `wasm_body` VDP filter
+- `vcl_init`: load modules and configure limits/pools for that VCL
+- `vcl.use`: new traffic moves to the new VCL
+- `VCL_EVENT_DISCARD`: unregister the filter, stop timers, destroy pools, then delete Wasmtime objects
+
+No Wasmtime engine is shared between different loaded VCLs. That avoids
+cross-VCL lifetime bugs and lets a reload compile a new module version without
+mutating the module set used by older traffic.
+
 ### Store Pooling
 
 Instead of creating a new Wasmtime instance per request, vmod-wasm pre-creates a pool of instances at VCL init time. This eliminates compilation latency from the request path.
 
-- Pool size: number of Varnish worker threads
+- Default pool size: 8 stores per module
+- Configurable with `wasm.set_store_pool_size(module, size)` after `wasm.load()`
+- Valid range: 1-256 stores per module
 - Checkout: O(1) via atomic counter
-- Return: instance is reset (memory zeroed) before return to pool
+- Return: instance memory is restored from the warm snapshot before reuse
+
+If no warm store is available, the request falls back to a fresh Wasmtime store
+and instance. The pool is an optimization, not a correctness dependency.
 
 ### Epoch-Based Time Limits
 
@@ -122,15 +145,16 @@ Unlike fuel-based metering (which adds per-instruction overhead), epoch interrup
 - Zero overhead during normal execution
 - Background ticker thread (1ms resolution)
 - Configurable per VCL load via `wasm.set_epoch_deadline(ms)`
+- Default deadline: 5000ms; production filters should set an explicit lower value
 
 ### HTTP Connection Pooling
 
 Proxy-Wasm HTTP callouts (`proxy_http_call`) reuse connections via an internal pool:
 
-- Blocking TCP sockets per Varnish worker thread
-- Connection reuse within a configurable window
+- Blocking TCP sockets from the Varnish worker thread executing the filter
+- Default pool size: 16 persistent connections; configurable with `wasm.set_http_pool_size(size)`
 - Circuit breaker: after N consecutive failures, short-circuit for cooldown period
-- SSRF prevention: upstream allowlist + IP rebinding checks after DNS resolution
+- SSRF prevention: upstream allowlist plus private/internal IP checks for non-allowlisted destinations after DNS resolution
 
 ### Deferred HTTP Callout Callback
 
@@ -165,11 +189,14 @@ Response body streaming uses Varnish Delivery Processors (VDP):
 
 ## Thread Safety
 
-- **Engine**: single Wasmtime engine shared across all threads (immutable after init)
-- **Store pool**: lock-free checkout via atomic operations
+- **VCL registry**: protected by a process-wide mutex when mapping `ctx->vcl` to the correct engine
+- **Engine**: one Wasmtime engine per loaded VCL, immutable after `vcl_init`
+- **Modules**: compiled once during VCL load/init and never mutated on the request path
+- **Store pool**: per-module lock-free checkout via atomic operations
 - **Shared data**: reader-writer lock (RWLock) per hash bucket
 - **Metrics**: atomic u64 counters; RWLock for metric definition
-- **HTTP pool**: per-thread TCP connection state (no cross-thread sharing)
+- **HTTP pool**: shared pool protected by internal locks; pooled connections are reused only after clean idle return
+- **Teardown**: tick timers and pools are stopped before Wasmtime modules, linker, and engine are deleted
 
 ## File Map
 

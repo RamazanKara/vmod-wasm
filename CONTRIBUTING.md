@@ -35,19 +35,31 @@ For native development, generate and configure the build first:
    make lint
    ```
 
-3. **Run the full test suite (Docker):**
+3. **Run dependency audit checks:**
+
+   ```shell
+   make audit
+   ```
+
+4. **Run the full test suite (Docker):**
 
    ```shell
    make test
    ```
 
-4. **Format code:**
+5. **Format code:**
 
    ```shell
    make fmt
    ```
 
-5. **Run the full release dry-run before release-impacting changes:**
+6. **Run a soak test for lifecycle, pooling, reload, or concurrency changes:**
+
+   ```shell
+   make soak-test
+   ```
+
+7. **Run the full release dry-run before release-impacting changes:**
 
    ```shell
    make release-dry-run
@@ -105,11 +117,24 @@ test: add VTC for bot detection edge case
 3. Update relevant documentation if behavior changes.
 4. Request review from a maintainer.
 
+## Release Tagging
+
+Stable release tags include the supported Varnish ABI line:
+
+```shell
+git tag varnish9-v4.3.3
+git push origin varnish9-v4.3.3
+```
+
+The package version remains semantic (`4.3.3`); the tag prefix makes the Varnish
+support line explicit for release assets.
+
 ## Reporting Issues
 
 Open a GitHub issue with:
 
 - Varnish version
 - Wasmtime version (from `configure.ac`)
+- Release tag or commit SHA
 - Steps to reproduce
 - Expected vs actual behavior
