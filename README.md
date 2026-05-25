@@ -15,6 +15,14 @@ vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) runtime into Varnish Cach
 
 It includes an HTTP-focused [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) implementation for running standard Wasm filters on Varnish, plus a raw host-function path for small purpose-built modules.
 
+## Demo
+
+![vmod-wasm perf smoke demo](docs/assets/vmod-wasm-perf-demo.gif)
+
+Short `scripts/perf-test.sh` run across baseline proxying, raw Wasm execution,
+Proxy-Wasm header callbacks, response-body inspection, and response-body
+rewrite. [Watch the MP4](docs/assets/vmod-wasm-perf-demo.mp4).
+
 ## Features
 
 - Load `.wasm` modules at VCL init time
