@@ -77,7 +77,7 @@ uint32_t vwasm_engine_get_http_timeout(struct vwasm_engine *engine);
 /*
  * Execute a Proxy-Wasm module lifecycle for HTTP request filtering.
  *
- * Full ABI v0.2.1 lifecycle:
+ * HTTP ABI v0.2.1 lifecycle:
  *   1. _initialize                      — Wasm module init
  *   2. proxy_on_context_create(1, 0)    — root context
  *   3. proxy_on_vm_start(1, vm_config_len) — VM startup
@@ -101,7 +101,7 @@ int vwasm_proxy_wasm_call(struct vwasm_engine *engine,
 /*
  * Execute a Proxy-Wasm module lifecycle for HTTP response filtering.
  *
- * Full ABI v0.2.1 lifecycle (same as above but calls
+ * HTTP ABI v0.2.1 lifecycle (same as above but calls
  * proxy_on_response_headers/body instead of request).
  *
  * Returns: action code (0=CONTINUE, 1=PAUSE), or -1 on error.

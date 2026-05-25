@@ -65,7 +65,7 @@ following security considerations:
 
 ### Body Access
 - `proxy_get_buffer_bytes`: Read-only access to request/response body
-- `proxy_set_buffer_bytes`: Can modify request body (for rewriting)
+- `proxy_set_buffer_bytes`: Can rewrite response body chunks in the VDP; request-body replacements are visible to later module reads
 - Body modification is per-request, not persistent
 
 ### Property Access

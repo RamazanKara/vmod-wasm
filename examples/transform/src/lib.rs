@@ -6,7 +6,7 @@
 //! interaction without the proxy-wasm SDK.
 
 // Import the host function for setting header map values.
-// map_type 3 = ResponseHeaders in the Proxy-Wasm ABI.
+// map_type 2 = HTTP_RESPONSE_HEADERS in the Proxy-Wasm ABI.
 extern "C" {
     fn proxy_add_header_map_value(
         map_type: i32,
@@ -17,7 +17,7 @@ extern "C" {
     ) -> i32;
 }
 
-const MAP_TYPE_RESPONSE_HEADERS: i32 = 3;
+const MAP_TYPE_RESPONSE_HEADERS: i32 = 2;
 
 #[no_mangle]
 pub extern "C" fn proxy_on_memory_allocate(size: i32) -> i32 {

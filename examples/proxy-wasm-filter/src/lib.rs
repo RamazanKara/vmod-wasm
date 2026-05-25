@@ -74,6 +74,15 @@ impl HttpContext for FilterHttp {
             &format!("sdk-filter: response body size={}", body_size),
         )
         .ok();
+
+        if body_size > 0 {
+            if let Some(body) = self.get_http_response_body(0, body_size) {
+                if body == b"rewrite-me" {
+                    self.set_http_response_body(0, body_size, b"rewrote-it");
+                }
+            }
+        }
+
         Action::Continue
     }
 }

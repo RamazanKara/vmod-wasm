@@ -4,11 +4,12 @@
  *
  * Proxy-Wasm ABI host function implementations.
  *
- * Full implementation of the Proxy-Wasm ABI v0.2.1 for HTTP filtering
- * on Varnish Cache. Functions are registered under the "env" namespace.
+ * HTTP-focused Proxy-Wasm ABI v0.2.1 implementation for Varnish Cache.
+ * Functions are registered under the "env" namespace.
  *
- * Not implemented (returns UNIMPLEMENTED):
+ * Not implemented (registered for SDK link compatibility, returns NOT_FOUND):
  *   - proxy_grpc_* (Varnish is HTTP-only, no gRPC support)
+ *   - proxy_call_foreign_function (no foreign-function registry)
  */
 
 #include <string.h>
@@ -262,23 +263,6 @@ pw_proxy_get_current_time(void *env, wasmtime_caller_t *caller,
  * ---------------------------------------------------------------- */
 
 static wasm_trap_t *
-pw_stub_ok(void *env, wasmtime_caller_t *caller,
-    const wasmtime_val_t *args, size_t nargs,
-    wasmtime_val_t *results, size_t nresults)
-{
-	(void)env;
-	(void)caller;
-	(void)args;
-	(void)nargs;
-
-	if (nresults > 0) {
-		results[0].kind = WASMTIME_I32;
-		results[0].of.i32 = PROXY_OK;
-	}
-	return (NULL);
-}
-
-static wasm_trap_t *
 pw_stub_not_found(void *env, wasmtime_caller_t *caller,
     const wasmtime_val_t *args, size_t nargs,
     wasmtime_val_t *results, size_t nresults)
@@ -293,6 +277,81 @@ pw_stub_not_found(void *env, wasmtime_caller_t *caller,
 		results[0].of.i32 = PROXY_NOT_FOUND;
 	}
 	return (NULL);
+}
+
+/* ----------------------------------------------------------------
+ * proxy_set_effective_context
+ * ---------------------------------------------------------------- */
+
+static wasm_trap_t *
+pw_proxy_set_effective_context(void *env, wasmtime_caller_t *caller,
+    const wasmtime_val_t *args, size_t nargs,
+    wasmtime_val_t *results, size_t nresults)
+{
+	struct vwasm_proxy_ctx *ctx;
+	uint32_t context_id;
+
+	(void)env;
+	(void)nargs;
+	(void)nresults;
+	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
+
+	results[0].kind = WASMTIME_I32;
+	context_id = (uint32_t)args[0].of.i32;
+
+	if (context_id == ctx->root_context_id ||
+	    context_id == ctx->stream_context_id) {
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+
+	results[0].of.i32 = PROXY_BAD_ARGUMENT;
+	return (NULL);
+}
+
+static int
+pw_replace_bytes(const uint8_t *base, size_t base_len, uint32_t start,
+    uint32_t replace_len, const uint8_t *value, uint32_t value_len,
+    uint8_t **out, size_t *out_len)
+{
+	size_t prefix_len, suffix_offset, suffix_len, new_len;
+	uint8_t *buf;
+
+	if (out == NULL || out_len == NULL)
+		return (-1);
+
+	if (start > base_len)
+		start = (uint32_t)base_len;
+	prefix_len = start;
+
+	if (replace_len > base_len - prefix_len)
+		replace_len = (uint32_t)(base_len - prefix_len);
+	suffix_offset = prefix_len + replace_len;
+	suffix_len = base_len - suffix_offset;
+
+	if (value_len > SIZE_MAX - prefix_len ||
+	    prefix_len + value_len > SIZE_MAX - suffix_len)
+		return (-1);
+	new_len = prefix_len + value_len + suffix_len;
+
+	buf = NULL;
+	if (new_len > 0) {
+		buf = malloc(new_len);
+		if (buf == NULL)
+			return (-1);
+		if (prefix_len > 0 && base != NULL)
+			memcpy(buf, base, prefix_len);
+		if (value_len > 0 && value != NULL)
+			memcpy(buf + prefix_len, value, value_len);
+		if (suffix_len > 0 && base != NULL)
+			memcpy(buf + prefix_len + value_len,
+			    base + suffix_offset, suffix_len);
+	}
+
+	*out = buf;
+	*out_len = new_len;
+	return (0);
 }
 
 /* ----------------------------------------------------------------
@@ -386,14 +445,17 @@ pw_proxy_done(void *env, wasmtime_caller_t *caller,
     const wasmtime_val_t *args, size_t nargs,
     wasmtime_val_t *results, size_t nresults)
 {
+	struct vwasm_proxy_ctx *ctx;
 
 	(void)env;
-	(void)caller;
 	(void)args;
 	(void)nargs;
 	(void)nresults;
 
-	/* Single-context model: done is a no-op */
+	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+	AN(ctx);
+	ctx->done = 1;
+
 	results[0].kind = WASMTIME_I32;
 	results[0].of.i32 = PROXY_OK;
 	return (NULL);
@@ -437,10 +499,13 @@ pw_proxy_get_buffer_bytes(void *env, wasmtime_caller_t *caller,
 		    ctx->active_http_call->response.valid) {
 			data = (const char *)ctx->active_http_call->response.body;
 			data_len = ctx->active_http_call->response.body_len;
+		} else {
+			results[0].of.i32 = PROXY_NOT_FOUND;
+			return (NULL);
 		}
 		break;
 	case PROXY_BUFFER_HTTP_REQUEST_BODY:
-		if (ctx->body_modified && ctx->modified_body != NULL) {
+		if (ctx->body_modified) {
 			data = (const char *)ctx->modified_body;
 			data_len = ctx->modified_body_len;
 		} else if (ctx->request_body != NULL) {
@@ -449,15 +514,23 @@ pw_proxy_get_buffer_bytes(void *env, wasmtime_caller_t *caller,
 		}
 		break;
 	case PROXY_BUFFER_HTTP_RESPONSE_BODY:
-		if (ctx->response_body != NULL) {
+		if (ctx->body_modified) {
+			data = (const char *)ctx->modified_body;
+			data_len = ctx->modified_body_len;
+		} else if (ctx->response_body != NULL) {
 			data = (const char *)ctx->response_body;
 			data_len = ctx->response_body_len;
 		}
 		break;
+	case PROXY_BUFFER_DOWNSTREAM_DATA:
+	case PROXY_BUFFER_UPSTREAM_DATA:
+	case PROXY_BUFFER_GRPC_RECV_MSG:
+	case PROXY_BUFFER_FOREIGN_FUNC_ARGS:
+		results[0].of.i32 = PROXY_NOT_FOUND;
+		return (NULL);
 	default:
-		data = NULL;
-		data_len = 0;
-		break;
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
 	}
 
 	/* Apply start/max_size */
@@ -492,8 +565,11 @@ pw_proxy_set_buffer_bytes(void *env, wasmtime_caller_t *caller,
 {
 	struct vwasm_proxy_ctx *ctx;
 	int32_t buffer_type;
-	uint32_t start, size, data_ptr;
-	uint8_t *new_body;
+	uint32_t start, size, data_ptr, data_size;
+	const uint8_t *base;
+	size_t base_len;
+	uint8_t *value_data, *new_body;
+	size_t new_body_len;
 
 	(void)env;
 	ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
@@ -508,31 +584,66 @@ pw_proxy_set_buffer_bytes(void *env, wasmtime_caller_t *caller,
 	start = (uint32_t)args[1].of.i32;
 	size = (uint32_t)args[2].of.i32;
 	data_ptr = (uint32_t)args[3].of.i32;
-	/* args[4] = data_size (replacement data size) */
-	(void)start;
-	(void)size;
+	data_size = (uint32_t)args[4].of.i32;
+
+	value_data = NULL;
+	if (data_size > 0) {
+		if (!pw_validate_region(ctx, data_ptr, data_size)) {
+			results[0].of.i32 = PROXY_BAD_ARGUMENT;
+			return (NULL);
+		}
+		value_data = pw_mem_ptr(ctx, data_ptr);
+	}
 
 	switch (buffer_type) {
 	case PROXY_BUFFER_HTTP_REQUEST_BODY:
-		/* Replace request body with module-provided data */
-		if (args[4].of.i32 > 0 &&
-		    pw_validate_region(ctx, data_ptr, (uint32_t)args[4].of.i32)) {
-			new_body = malloc((size_t)args[4].of.i32);
-			if (new_body == NULL) {
-				results[0].of.i32 = PROXY_INTERNAL;
-				return (NULL);
-			}
-			memcpy(new_body, pw_mem_ptr(ctx, data_ptr),
-			    (size_t)args[4].of.i32);
-			free(ctx->modified_body);
-			ctx->modified_body = new_body;
-			ctx->modified_body_len = (size_t)args[4].of.i32;
-			ctx->body_modified = 1;
+		if (ctx->body_modified) {
+			base = ctx->modified_body;
+			base_len = ctx->modified_body_len;
+		} else {
+			base = ctx->request_body;
+			base_len = ctx->request_body_len;
 		}
+		if (pw_replace_bytes(base, base_len, start, size,
+		    value_data, data_size, &new_body, &new_body_len) != 0) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		free(ctx->modified_body);
+		ctx->modified_body = new_body;
+		ctx->modified_body_len = new_body_len;
+		ctx->body_modified = 1;
 		break;
+	case PROXY_BUFFER_HTTP_RESPONSE_BODY:
+		if (ctx->body_modified) {
+			base = ctx->modified_body;
+			base_len = ctx->modified_body_len;
+		} else {
+			base = ctx->response_body;
+			base_len = ctx->response_body_len;
+		}
+		if (pw_replace_bytes(base, base_len, start, size,
+		    value_data, data_size, &new_body, &new_body_len) != 0) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		free(ctx->modified_body);
+		ctx->modified_body = new_body;
+		ctx->modified_body_len = new_body_len;
+		ctx->body_modified = 1;
+		break;
+	case PROXY_BUFFER_VM_CONFIGURATION:
+	case PROXY_BUFFER_PLUGIN_CONFIG:
+	case PROXY_BUFFER_HTTP_CALL_BODY:
+	case PROXY_BUFFER_DOWNSTREAM_DATA:
+	case PROXY_BUFFER_UPSTREAM_DATA:
+	case PROXY_BUFFER_GRPC_RECV_MSG:
+	case PROXY_BUFFER_FOREIGN_FUNC_ARGS:
+		results[0].of.i32 = PROXY_NOT_FOUND;
+		return (NULL);
 	default:
-		/* Other buffer types are read-only in this host */
-		break;
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
 	}
 
 	results[0].of.i32 = PROXY_OK;
@@ -572,19 +683,32 @@ pw_proxy_get_buffer_status(void *env, wasmtime_caller_t *caller,
 		if (ctx->active_http_call != NULL &&
 		    ctx->active_http_call->response.valid)
 			data_len = ctx->active_http_call->response.body_len;
+		else {
+			results[0].of.i32 = PROXY_NOT_FOUND;
+			return (NULL);
+		}
 		break;
 	case PROXY_BUFFER_HTTP_REQUEST_BODY:
-		if (ctx->body_modified && ctx->modified_body != NULL)
+		if (ctx->body_modified)
 			data_len = ctx->modified_body_len;
 		else if (ctx->request_body != NULL)
 			data_len = ctx->request_body_len;
 		break;
 	case PROXY_BUFFER_HTTP_RESPONSE_BODY:
-		if (ctx->response_body != NULL)
+		if (ctx->body_modified)
+			data_len = ctx->modified_body_len;
+		else if (ctx->response_body != NULL)
 			data_len = ctx->response_body_len;
 		break;
+	case PROXY_BUFFER_DOWNSTREAM_DATA:
+	case PROXY_BUFFER_UPSTREAM_DATA:
+	case PROXY_BUFFER_GRPC_RECV_MSG:
+	case PROXY_BUFFER_FOREIGN_FUNC_ARGS:
+		results[0].of.i32 = PROXY_NOT_FOUND;
+		return (NULL);
 	default:
-		break;
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
 	}
 
 	if (pw_write_u32(ctx, (uint32_t)args[1].of.i32,
@@ -1337,12 +1461,12 @@ pw_define_func_typed(wasmtime_linker_t *linker, const char *name,
 }
 
 /* ----------------------------------------------------------------
- * Register ALL Proxy-Wasm ABI v0.2.1 host functions.
+ * Register Proxy-Wasm ABI v0.2.1 host functions.
  *
  * Categories:
  *   IMPLEMENTED: Full functional implementation
  *   ACCEPTED:    Accepts the call, stores state, returns OK
- *   STUB:        Returns PROXY_UNIMPLEMENTED (cannot be implemented)
+ *   STUB:        Returns PROXY_NOT_FOUND (cannot be implemented by Varnish)
  * ---------------------------------------------------------------- */
 
 int
@@ -1415,7 +1539,7 @@ vwasm_proxy_wasm_define_imports(wasmtime_linker_t *linker)
 
 	/* === Context (single-context model) === */
 	if (pw_define_func(linker, "proxy_set_effective_context", 1, 1,
-	    pw_stub_ok) != 0)
+	    pw_proxy_set_effective_context) != 0)
 		return (-1);
 	if (pw_define_func(linker, "proxy_done", 0, 1,
 	    pw_proxy_done) != 0)

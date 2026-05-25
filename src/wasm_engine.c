@@ -905,7 +905,7 @@ call_wasm_void(wasmtime_context_t *context, wasmtime_instance_t *instance,
 /* ----------------------------------------------------------------
  * Proxy-Wasm unified lifecycle execution.
  *
- * Runs the full ABI v0.2.1 callback sequence for either request or
+ * Runs the HTTP ABI v0.2.1 callback sequence for either request or
  * response phase, with optional vm_config and plugin_config.
  * Returns the action from proxy_on_{request,response}_headers,
  * or -1 on error.
@@ -992,8 +992,21 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 	/* Try to acquire a pre-warmed store from the pool */
 	pool_idx = (int)(entry - engine->modules);
 	if (pool_idx >= 0 && pool_idx < MAX_MODULES &&
-	    engine->pools[pool_idx] != NULL)
-		pooled = vwasm_store_pool_acquire(engine->pools[pool_idx]);
+	    engine->pools[pool_idx] != NULL) {
+		/*
+		 * The pool reset restores linear memory, but not mutable Wasm
+		 * globals or other VM state. SDK modules with _initialize use
+		 * that state, so they must run in fresh stores. Raw/stateless
+		 * modules can still use the fast pooled path.
+		 */
+		if (engine->warm_instances[pool_idx].has_initialize) {
+			__sync_fetch_and_add(
+			    &engine->pools[pool_idx]->fallbacks, 1);
+		} else {
+			pooled = vwasm_store_pool_acquire(
+			    engine->pools[pool_idx]);
+		}
+	}
 
 	/* Set up proxy-wasm context */
 	memset(&proxy_ctx, 0, sizeof(proxy_ctx));
@@ -1075,38 +1088,67 @@ proxy_wasm_execute(struct vwasm_engine *engine,
 		proxy_ctx.allocator_valid = 1;
 	}
 
-	/* Call _initialize if exported */
-	call_wasm_void(context, &instance, "_initialize", NULL, 0);
+	if (pooled == NULL) {
+		/* Call _initialize if exported */
+		call_wasm_void(context, &instance, "_initialize", NULL, 0);
 
-	/* 1. Create root context */
-	wasmtime_context_set_epoch_deadline(context,
-	    engine->epoch_deadline_ms);
-	args[0].kind = WASMTIME_I32;
-	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
-	args[1].kind = WASMTIME_I32;
-	args[1].of.i32 = 0;
-	call_wasm_void(context, &instance,
-	    "proxy_on_context_create", args, 2);
+		/* 1. Create root context */
+		wasmtime_context_set_epoch_deadline(context,
+		    engine->epoch_deadline_ms);
+		args[0].kind = WASMTIME_I32;
+		args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
+		args[1].kind = WASMTIME_I32;
+		args[1].of.i32 = 0;
+		call_wasm_void(context, &instance,
+		    "proxy_on_context_create", args, 2);
 
-	/* 2. VM start */
-	wasmtime_context_set_epoch_deadline(context,
-	    engine->epoch_deadline_ms);
-	args[0].kind = WASMTIME_I32;
-	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
-	args[1].kind = WASMTIME_I32;
-	args[1].of.i32 = (int32_t)vm_config_len;
-	call_wasm_func(context, &instance,
-	    "proxy_on_vm_start", args, 2, NULL);
+		/* 2. VM start */
+		wasmtime_context_set_epoch_deadline(context,
+		    engine->epoch_deadline_ms);
+		args[0].kind = WASMTIME_I32;
+		args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
+		args[1].kind = WASMTIME_I32;
+		args[1].of.i32 = (int32_t)vm_config_len;
+		call_wasm_func(context, &instance,
+		    "proxy_on_vm_start", args, 2, NULL);
 
-	/* 3. Configure */
-	wasmtime_context_set_epoch_deadline(context,
-	    engine->epoch_deadline_ms);
-	args[0].kind = WASMTIME_I32;
-	args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
-	args[1].kind = WASMTIME_I32;
-	args[1].of.i32 = (int32_t)plugin_config_len;
-	call_wasm_func(context, &instance,
-	    "proxy_on_configure", args, 2, NULL);
+		/* 3. Configure */
+		wasmtime_context_set_epoch_deadline(context,
+		    engine->epoch_deadline_ms);
+		args[0].kind = WASMTIME_I32;
+		args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
+		args[1].kind = WASMTIME_I32;
+		args[1].of.i32 = (int32_t)plugin_config_len;
+		call_wasm_func(context, &instance,
+		    "proxy_on_configure", args, 2, NULL);
+	} else if (vm_config_len > 0 || plugin_config_len > 0) {
+		/*
+		 * Pooled stores are restored from a warm snapshot taken after
+		 * _initialize, root context creation, vm_start, and configure.
+		 * Re-creating the root context breaks SDK modules, but configured
+		 * calls still need their per-call config buffers applied.
+		 */
+		if (vm_config_len > 0) {
+			wasmtime_context_set_epoch_deadline(context,
+			    engine->epoch_deadline_ms);
+			args[0].kind = WASMTIME_I32;
+			args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
+			args[1].kind = WASMTIME_I32;
+			args[1].of.i32 = (int32_t)vm_config_len;
+			call_wasm_func(context, &instance,
+			    "proxy_on_vm_start", args, 2, NULL);
+		}
+		if (plugin_config_len > 0) {
+			wasmtime_context_set_epoch_deadline(context,
+			    engine->epoch_deadline_ms);
+			args[0].kind = WASMTIME_I32;
+			args[0].of.i32 = (int32_t)proxy_ctx.root_context_id;
+			args[1].kind = WASMTIME_I32;
+			args[1].of.i32 = (int32_t)plugin_config_len;
+			call_wasm_func(context, &instance,
+			    "proxy_on_configure", args, 2, NULL);
+		}
+	}
 
 	/* 4. Create stream context */
 	wasmtime_context_set_epoch_deadline(context,
@@ -1535,6 +1577,17 @@ vwasm_engine_init_pool(struct vwasm_engine *engine,
 	if (vwasm_warm_instance_create(&engine->warm_instances[idx],
 	    engine, entry, vm_config, plugin_config) != 0)
 		return (-1);
+
+	/*
+	 * Rust SDK and other modules with _initialize can keep state outside
+	 * linear memory. Since the pool reset is a memory snapshot restore,
+	 * using pooled stores for those modules is unsafe; leave the module on
+	 * the cold-store path.
+	 */
+	if (engine->warm_instances[idx].has_initialize) {
+		vwasm_warm_instance_destroy(&engine->warm_instances[idx]);
+		return (0);
+	}
 
 	/* Create store pool pre-warmed with the snapshot */
 	engine->pools[idx] = vwasm_store_pool_new(pool_size,

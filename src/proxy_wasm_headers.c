@@ -82,6 +82,19 @@ pw_is_trailer_map(int32_t map_type)
 	    map_type == PROXY_MAP_HTTP_RESPONSE_TRAILERS);
 }
 
+static int
+pw_is_known_map(int32_t map_type)
+{
+	return (map_type == PROXY_MAP_HTTP_REQUEST_HEADERS ||
+	    map_type == PROXY_MAP_HTTP_REQUEST_TRAILERS ||
+	    map_type == PROXY_MAP_HTTP_RESPONSE_HEADERS ||
+	    map_type == PROXY_MAP_HTTP_RESPONSE_TRAILERS ||
+	    map_type == PROXY_MAP_GRPC_CALL_INITIAL_MD ||
+	    map_type == PROXY_MAP_GRPC_CALL_TRAILING_MD ||
+	    map_type == PROXY_MAP_HTTP_CALL_RESP_HEADERS ||
+	    map_type == PROXY_MAP_HTTP_CALL_RESP_TRAILERS);
+}
+
 static struct vwasm_trailer_map *
 pw_get_trailer_map(struct vwasm_proxy_ctx *ctx, int32_t map_type)
 {
@@ -244,6 +257,62 @@ pw_http_call_response_find_header(const struct vwasm_proxy_ctx *ctx,
 	return (NULL);
 }
 
+static size_t
+pw_http_call_response_headers_size(const struct vwasm_proxy_ctx *ctx)
+{
+	const char *raw, *raw_end, *p, *line_end;
+	size_t size;
+	uint32_t count;
+
+	if (ctx->active_http_call == NULL ||
+	    !ctx->active_http_call->response.valid ||
+	    ctx->active_http_call->response.raw_buf == NULL)
+		return (0);
+
+	raw = (const char *)ctx->active_http_call->response.raw_buf;
+	raw_end = raw + ctx->active_http_call->response.raw_len;
+	count = 0;
+	size = 4;
+
+	line_end = strstr(raw, "\r\n");
+	if (line_end != NULL) {
+		const char *sp = memchr(raw, ' ', (size_t)(line_end - raw));
+		if (sp != NULL) {
+			const char *sp2;
+			sp++;
+			sp2 = memchr(sp, ' ', (size_t)(line_end - sp));
+			if (sp2 == NULL)
+				sp2 = line_end;
+			count++;
+			size += 8 + strlen(":status") + 1 +
+			    (size_t)(sp2 - sp) + 1;
+		}
+		p = line_end + 2;
+	} else {
+		p = raw_end;
+	}
+
+	while (p < raw_end && count < 64) {
+		const char *colon;
+
+		line_end = strstr(p, "\r\n");
+		if (line_end == NULL || line_end == p)
+			break;
+		colon = memchr(p, ':', (size_t)(line_end - p));
+		if (colon != NULL) {
+			const char *v = colon + 1;
+			while (v < line_end && (*v == ' ' || *v == '\t'))
+				v++;
+			count++;
+			size += 8 + (size_t)(colon - p) + 1 +
+			    (size_t)(line_end - v) + 1;
+		}
+		p = line_end + 2;
+	}
+
+	return (count == 0 ? 0 : size);
+}
+
 /* ----------------------------------------------------------------
  * proxy_get_header_map_value
  * ---------------------------------------------------------------- */
@@ -318,6 +387,12 @@ pw_proxy_get_header_map_value(void *env, wasmtime_caller_t *caller,
 			return (NULL);
 		}
 		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
+	if (map_type == PROXY_MAP_HTTP_CALL_RESP_TRAILERS ||
+	    map_type == PROXY_MAP_GRPC_CALL_INITIAL_MD ||
+	    map_type == PROXY_MAP_GRPC_CALL_TRAILING_MD) {
+		results[0].of.i32 = PROXY_NOT_FOUND;
 		return (NULL);
 	}
 
@@ -751,6 +826,18 @@ pw_proxy_get_header_map_pairs(void *env, wasmtime_caller_t *caller,
 		results[0].of.i32 = PROXY_OK;
 		return (NULL);
 	}
+	if (map_type == PROXY_MAP_HTTP_CALL_RESP_TRAILERS ||
+	    map_type == PROXY_MAP_GRPC_CALL_INITIAL_MD ||
+	    map_type == PROXY_MAP_GRPC_CALL_TRAILING_MD) {
+		if (pw_return_bytes(ctx, NULL, 0,
+		    (uint32_t)args[1].of.i32,
+		    (uint32_t)args[2].of.i32) != 0) {
+			results[0].of.i32 = PROXY_INTERNAL;
+			return (NULL);
+		}
+		results[0].of.i32 = PROXY_OK;
+		return (NULL);
+	}
 
 	hp = pw_get_header_map(ctx, map_type);
 	if (hp == NULL) {
@@ -1078,7 +1165,7 @@ pw_proxy_set_header_map_pairs(void *env, wasmtime_caller_t *caller,
 }
 
 /* ----------------------------------------------------------------
- * proxy_get_header_map_size — return number of entries in a map
+ * proxy_get_header_map_size — return serialized map size
  *
  * ABI: proxy_get_header_map_size(map_type, return_size_ptr) -> status
  * ---------------------------------------------------------------- */
@@ -1090,7 +1177,7 @@ pw_proxy_get_header_map_size(void *env, wasmtime_caller_t *caller,
 {
 	struct vwasm_proxy_ctx *ctx;
 	int32_t map_type;
-	uint32_t count = 0;
+	uint32_t serialized_size = 0;
 	uint32_t i;
 
 	(void)env;
@@ -1102,36 +1189,101 @@ pw_proxy_get_header_map_size(void *env, wasmtime_caller_t *caller,
 
 	map_type = args[0].of.i32;
 
+	if (!pw_is_known_map(map_type)) {
+		results[0].of.i32 = PROXY_BAD_ARGUMENT;
+		return (NULL);
+	}
+
 	if (pw_is_trailer_map(map_type)) {
 		const struct vwasm_trailer_map *tm =
 		    pw_get_trailer_map(ctx, map_type);
-		if (tm != NULL)
-			count = tm->count;
+		if (tm != NULL && tm->count > 0) {
+			serialized_size = 4 + tm->count * 8;
+			for (i = 0; i < tm->count; i++)
+				serialized_size +=
+				    (uint32_t)tm->entries[i].name_len + 1 +
+				    (uint32_t)tm->entries[i].value_len + 1;
+		}
+	} else if (map_type == PROXY_MAP_HTTP_CALL_RESP_HEADERS) {
+		serialized_size = (uint32_t)
+		    pw_http_call_response_headers_size(ctx);
+	} else if (map_type == PROXY_MAP_HTTP_CALL_RESP_TRAILERS) {
+		serialized_size = 0;
+	} else if (map_type == PROXY_MAP_GRPC_CALL_INITIAL_MD ||
+	    map_type == PROXY_MAP_GRPC_CALL_TRAILING_MD) {
+		results[0].of.i32 = PROXY_NOT_FOUND;
+		return (NULL);
 	} else {
 		const struct http *hp = pw_get_header_map(ctx, map_type);
 		if (hp != NULL) {
-			count = (uint32_t)(hp->nhd - HTTP_HDR_FIRST);
+			uint32_t num_headers, data_size;
+
+			num_headers = (uint32_t)(hp->nhd - HTTP_HDR_FIRST);
+			data_size = 0;
+
 			if (map_type == PROXY_MAP_HTTP_REQUEST_HEADERS) {
-				if (hp->hd[HTTP_HDR_METHOD].b != NULL)
-					count++;
-				if (hp->hd[HTTP_HDR_URL].b != NULL)
-					count++;
+				if (hp->hd[HTTP_HDR_METHOD].b != NULL) {
+					num_headers++;
+					data_size += strlen(":method") + 1 +
+					    strlen(hp->hd[HTTP_HDR_METHOD].b) + 1;
+				}
+				if (hp->hd[HTTP_HDR_URL].b != NULL) {
+					num_headers++;
+					data_size += strlen(":path") + 1 +
+					    strlen(hp->hd[HTTP_HDR_URL].b) + 1;
+				}
 				for (i = HTTP_HDR_FIRST; i < hp->nhd; i++) {
 					if (hp->hd[i].b != NULL &&
 					    strncasecmp(hp->hd[i].b, "Host:",
 					    5) == 0) {
-						count++;
+						const char *v = hp->hd[i].b + 5;
+						while (*v == ' ' || *v == '\t')
+							v++;
+						num_headers++;
+						data_size += strlen(":authority") + 1 +
+						    strlen(v) + 1;
 						break;
 					}
 				}
 			} else if (map_type == PROXY_MAP_HTTP_RESPONSE_HEADERS &&
 			    hp->hd[HTTP_HDR_STATUS].b != NULL) {
-				count++;
+				num_headers++;
+				data_size += strlen(":status") + 1 +
+				    strlen(hp->hd[HTTP_HDR_STATUS].b) + 1;
 			}
+
+			for (i = 0; i < (uint32_t)(hp->nhd - HTTP_HDR_FIRST);
+			    i++) {
+				uint32_t idx = HTTP_HDR_FIRST + i;
+				const char *hdr_line;
+				const char *colon;
+
+				if (idx >= hp->nhd)
+					break;
+				hdr_line = hp->hd[idx].b;
+				if (hdr_line == NULL) {
+					data_size += 2;
+					continue;
+				}
+				colon = strchr(hdr_line, ':');
+				if (colon == NULL) {
+					data_size += (uint32_t)strlen(hdr_line) +
+					    2;
+				} else {
+					const char *val = colon + 1;
+					while (*val == ' ' || *val == '\t')
+						val++;
+					data_size += (uint32_t)(colon - hdr_line) +
+					    1 +
+					    (uint32_t)strlen(val) + 1;
+				}
+			}
+			serialized_size = 4 + num_headers * 8 + data_size;
 		}
 	}
 
-	if (pw_write_u32(ctx, (uint32_t)args[1].of.i32, count) != 0) {
+	if (pw_write_u32(ctx, (uint32_t)args[1].of.i32,
+	    serialized_size) != 0) {
 		results[0].of.i32 = PROXY_BAD_ARGUMENT;
 		return (NULL);
 	}

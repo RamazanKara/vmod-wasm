@@ -147,7 +147,7 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 
 ## Deployment Checklist
 
-- [ ] Verify the release tag matches your Varnish ABI line, for example `varnish9-v4.3.4`
+- [ ] Verify the release tag matches your Varnish ABI line, for example `varnish9-v4.3.5`
 - [ ] Confirm `ldd libvmod_wasm.so` resolves the intended bundled `libwasmtime.so`
 - [ ] Set `set_epoch_deadline()` appropriate for expected module latency
 - [ ] Set `set_memory_limit()` (16 MiB default is usually fine)
@@ -167,6 +167,17 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 - Epoch-based time limits have near-zero overhead (no per-instruction cost)
 - Memory limit enforcement is near-zero cost (page fault based)
 - HTTP callouts are synchronous — keep timeouts short
+
+For a quick local throughput sweep before larger canary tests, run:
+
+```bash
+make perf-test
+```
+
+The perf harness compares baseline Varnish proxying with raw `wasm.execute`,
+Proxy-Wasm header callbacks, response-body inspection, and response-body
+rewrite paths. Results are written under `perf-logs/` and are best used for
+relative comparisons on the same machine.
 
 ## Response Body Inspection
 
@@ -316,7 +327,7 @@ Per loaded VCL, vmod-wasm allocates:
 | Component | Memory | Notes |
 |-----------|--------|-------|
 | Wasm linear memory | Up to `memory_limit` per active or pooled instance | Default 16 MiB |
-| Store pool instances | `store_pool_size * memory_limit` worst case per module | Default 8 stores |
+| Store pool instances | `store_pool_size * memory_limit` worst case per poolable module | Default 8 stores; modules exporting `_initialize` bypass pooling |
 | Compiled module | ~1-5 MiB per module | Shared within one VCL engine |
 | HTTP connection pool | up to `http_pool_size` sockets + buffers | Default 16 connections |
 

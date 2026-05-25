@@ -119,7 +119,7 @@ Output: `examples/target/wasm32-unknown-unknown/release/my_filter.wasm`
 
 ## Available Proxy-Wasm ABI Functions
 
-All functions from the [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) are available. Key categories:
+The HTTP filter portions of the [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) are available. gRPC, L4 stream callbacks, and foreign-function calls are registered only where useful for SDK link compatibility and are not backed by Varnish behavior.
 
 ### Root Context Callbacks
 
@@ -268,6 +268,28 @@ For source distribution checks:
 ```bash
 docker run --rm vmod-wasm-ci make distcheck DISTCHECK_CONFIGURE_FLAGS="--with-wasmtime=/opt/wasmtime"
 ```
+
+### Performance Smoke Tests
+
+Use the perf harness for quick throughput comparisons across baseline Varnish,
+raw `wasm.execute`, Proxy-Wasm headers, and response-body paths:
+
+```bash
+make perf-test
+```
+
+For a shorter local run:
+
+```bash
+scripts/perf-test.sh \
+  --duration 5 \
+  --warmup 1 \
+  --concurrency 8
+```
+
+The harness writes logs and `results.ndjson` under `perf-logs/<timestamp>/`.
+Treat the numbers as directional unless you pin the host, Docker runtime,
+concurrency, and backend behavior.
 
 ### Soak Tests
 

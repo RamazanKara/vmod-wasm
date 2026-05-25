@@ -2,6 +2,32 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## [4.3.5] - 2026-05-25
+
+### Added
+- Added a Docker-backed `make perf-test` harness that compares baseline
+  proxying, raw Wasm execution, Proxy-Wasm header callbacks, response-body
+  inspection, and response-body rewrite paths.
+
+### Changed
+- Clarified documentation around the HTTP-focused Proxy-Wasm ABI surface and
+  Varnish-specific unsupported features.
+- Disabled store pooling for modules that export `_initialize`, including the
+  Rust Proxy-Wasm SDK, because memory-only pool resets cannot safely restore
+  mutable Wasm VM state.
+
+### Fixed
+- Aligned Proxy-Wasm map and buffer enum values with ABI v0.2.1, including
+  HTTP call response maps and foreign-function argument buffers.
+- Implemented response-body replacement semantics for
+  `proxy_set_buffer_bytes` and forwarded rewritten body chunks through the
+  Varnish delivery processor.
+- Reported serialized header map sizes from `proxy_get_header_map_size` and
+  returned explicit status codes for unsupported gRPC, stream, and foreign
+  surfaces.
+- Fixed the SDK response-body example and VTC coverage so final response body
+  chunks can be rewritten correctly.
+
 ## [4.3.4] - 2026-05-24
 
 ### Changed

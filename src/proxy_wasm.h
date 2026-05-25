@@ -4,7 +4,7 @@
  *
  * Proxy-Wasm ABI types and host function registration.
  *
- * Full implementation of the Proxy-Wasm ABI v0.2.1 for HTTP filtering.
+ * HTTP-focused Proxy-Wasm ABI v0.2.1 support for Varnish filtering.
  * See: https://github.com/proxy-wasm/spec
  */
 
@@ -53,9 +53,10 @@ typedef enum {
 	PROXY_MAP_HTTP_REQUEST_TRAILERS   = 1,
 	PROXY_MAP_HTTP_RESPONSE_HEADERS   = 2,
 	PROXY_MAP_HTTP_RESPONSE_TRAILERS  = 3,
+	PROXY_MAP_GRPC_CALL_INITIAL_MD    = 4,
+	PROXY_MAP_GRPC_CALL_TRAILING_MD   = 5,
 	PROXY_MAP_HTTP_CALL_RESP_HEADERS  = 6,
-	PROXY_MAP_HTTP_CALL_RESP_BODY     = 7,
-	PROXY_MAP_HTTP_CALL_RESP_TRAILERS = 8,
+	PROXY_MAP_HTTP_CALL_RESP_TRAILERS = 7,
 } proxy_map_type_t;
 
 typedef enum {
@@ -67,6 +68,7 @@ typedef enum {
 	PROXY_BUFFER_GRPC_RECV_MSG      = 5,
 	PROXY_BUFFER_VM_CONFIGURATION   = 6,
 	PROXY_BUFFER_PLUGIN_CONFIG      = 7,
+	PROXY_BUFFER_FOREIGN_FUNC_ARGS  = 8,
 } proxy_buffer_type_t;
 
 typedef enum {

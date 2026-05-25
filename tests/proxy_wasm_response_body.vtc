@@ -3,6 +3,8 @@ varnishtest "vmod-wasm: Proxy-Wasm response body access via VDP"
 server s1 {
     rxreq
     txresp -status 200 -body "Hello, World!"
+    rxreq
+    txresp -status 200 -body "rewrite-me"
 } -start
 
 varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
@@ -31,6 +33,13 @@ client c1 {
     rxresp
     expect resp.status == 200
     expect resp.body == "Hello, World!"
+} -run
+
+client c2 {
+    txreq -url "/rewrite"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "rewrote-it"
 } -run
 
 logexpect l1 -wait

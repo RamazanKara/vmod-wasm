@@ -13,13 +13,13 @@ A Varnish VMOD that executes WebAssembly modules for HTTP request processing at 
 
 vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) runtime into Varnish Cache 9.x, allowing you to write edge logic in **Rust**, **Go**, or **AssemblyScript**, compile it to WebAssembly, and execute it during request/response processing.
 
-It includes a [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) implementation for running standard Wasm filters on Varnish, plus a raw host-function path for small purpose-built modules.
+It includes an HTTP-focused [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) implementation for running standard Wasm filters on Varnish, plus a raw host-function path for small purpose-built modules.
 
 ## Features
 
 - Load `.wasm` modules at VCL init time
 - Call exported Wasm functions from VCL
-- Full Proxy-Wasm ABI v0.2.1 (header maps, trailers, buffers, HTTP callouts, properties, shared data, metrics, tick timer, stream control)
+- Proxy-Wasm ABI v0.2.1 HTTP filter support (header maps, trailers, buffers, HTTP callouts, properties, shared data, metrics, tick timer, stream control)
 - Deferred `proxy_on_http_call_response` callback — invoked after `on_http_request_headers` returns (avoids proxy-wasm SDK re-entrancy)
 - WASI support (`fd_write`, `clock_time_get`, `random_get` with real implementations)
 - Epoch-based execution time limits (low-overhead, no per-instruction cost)
@@ -120,9 +120,9 @@ make install
 
 ### Release Bundles
 
-GitHub releases use Varnish-specific tags such as `varnish9-v4.3.4` so the
+GitHub releases use Varnish-specific tags such as `varnish9-v4.3.5` so the
 supported Varnish ABI line is visible before download. The package version
-remains semantic (`4.3.4`), while the release channel identifies Varnish 9.
+remains semantic (`4.3.5`), while the release channel identifies Varnish 9.
 
 Release assets include source and convenience binary bundles for Linux `amd64`
 and `arm64` on Varnish 9. Binary bundles include `libvmod_wasm.so`,
@@ -143,6 +143,11 @@ docker run --rm vmod-wasm-ci make distcheck DISTCHECK_CONFIGURE_FLAGS="--with-wa
 For longer lifecycle and reload testing, run `make soak-test`. Logs are written
 under `soak-logs/` and include client errors, reload errors, Varnish error logs,
 and key `varnishstat` counters.
+
+For a quick local throughput sweep, run `make perf-test`. It compares baseline
+Varnish proxying with raw `wasm.execute`, Proxy-Wasm request/response headers,
+and response-body inspection/rewrite paths. Logs and NDJSON results are written
+under `perf-logs/`.
 
 ## Documentation
 

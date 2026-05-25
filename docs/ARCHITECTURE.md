@@ -134,6 +134,8 @@ Instead of creating a new Wasmtime instance per request, vmod-wasm pre-creates a
 - Valid range: 1-256 stores per module
 - Checkout: O(1) via atomic counter
 - Return: instance memory is restored from the warm snapshot before reuse
+- Modules exporting `_initialize` bypass store pooling because mutable Wasm
+  globals and VM state cannot be reset from a linear-memory snapshot alone
 
 If no warm store is available, the request falls back to a fresh Wasmtime store
 and instance. The pool is an optimization, not a correctness dependency.

@@ -38,13 +38,13 @@ This document tracks the implementation status of the
 | `proxy_remove_header_map_value` | ✅ Implemented | Request/response headers |
 | `proxy_get_header_map_pairs` | ✅ Implemented | Includes pseudo-headers |
 | `proxy_set_header_map_pairs` | ✅ Implemented | Replaces all headers from serialized map |
-| `proxy_get_header_map_size` | ✅ Implemented | Returns entry count for any map type |
+| `proxy_get_header_map_size` | ✅ Implemented | Returns serialized map byte size |
 
 ### Buffers
 | Function | Status | Notes |
 |----------|--------|-------|
-| `proxy_get_buffer_bytes` | ✅ Implemented | HTTP_REQUEST_BODY, HTTP_RESPONSE_BODY, VM_CONFIG, PLUGIN_CONFIG |
-| `proxy_set_buffer_bytes` | ✅ Implemented | HTTP_REQUEST_BODY modification |
+| `proxy_get_buffer_bytes` | ✅ Implemented | HTTP_REQUEST_BODY, HTTP_RESPONSE_BODY, HTTP_CALL_RESPONSE_BODY, VM_CONFIG, PLUGIN_CONFIG |
+| `proxy_set_buffer_bytes` | ✅ Implemented | HTTP_RESPONSE_BODY modification through VDP; HTTP_REQUEST_BODY replacement is visible to later module reads |
 | `proxy_get_buffer_status` | ✅ Implemented | Returns buffer size and flags |
 
 ### HTTP Calls
@@ -84,8 +84,8 @@ This document tracks the implementation status of the
 | Function | Status | Notes |
 |----------|--------|-------|
 | `proxy_send_local_response` | ✅ Implemented | Captures body + headers |
-| `proxy_set_effective_context` | ✅ No-op | Single context per call; switching not needed |
-| `proxy_done` | ✅ No-op | Host manages lifecycle; module signal not required |
+| `proxy_set_effective_context` | ✅ Implemented | Validates root/stream context IDs |
+| `proxy_done` | ✅ Implemented | Records module completion signal |
 | `proxy_continue_stream` | ✅ Implemented | Resumes paused request/response processing |
 | `proxy_close_stream` | ✅ Implemented | Terminates stream processing |
 
@@ -172,9 +172,13 @@ Response maps include:
    reduce SSRF risk. Explicit allowlist entries are treated as trusted
    destinations.
 
-4. **No gRPC support**: gRPC-specific features are not implemented.
+4. **No gRPC support**: gRPC hostcalls are registered for SDK link
+   compatibility, but return `NOT_FOUND`; gRPC callbacks are not invoked.
 
 5. **No L4 (TCP/UDP) support**: Only HTTP filter context is supported.
 
-6. **Single filter per execution**: Unlike Envoy's filter chain, each
+6. **No foreign-function registry**: `proxy_call_foreign_function` is
+   registered for link compatibility, but returns `NOT_FOUND`.
+
+7. **Single filter per execution**: Unlike Envoy's filter chain, each
    `proxy_wasm_on_request()` call runs one module. Chain in VCL if needed.

@@ -137,6 +137,11 @@ vdp_wasm_bytes(struct vdp_ctx *vdc, enum vdp_action act, void **priv,
 		tmp_ctx.vsl = vdc->vsl;
 		task->proxy_ctx.vrt_ctx = &tmp_ctx;
 
+		free(task->proxy_ctx.modified_body);
+		task->proxy_ctx.modified_body = NULL;
+		task->proxy_ctx.modified_body_len = 0;
+		task->proxy_ctx.body_modified = 0;
+
 		/* Expose current chunk to host functions */
 		if (len > 0 && ptr != NULL) {
 			task->proxy_ctx.response_body = ptr;
@@ -182,7 +187,20 @@ vdp_wasm_bytes(struct vdp_ctx *vdc, enum vdp_action act, void **priv,
 		task->proxy_ctx.vrt_ctx = NULL;
 	}
 
-	/* Always pass bytes through to next filter (client) */
+	/* Pass modified response chunks when the module rewrote the buffer. */
+	if (task->proxy_ctx.body_modified) {
+		const void *out_ptr = task->proxy_ctx.modified_body;
+		ssize_t out_len = (ssize_t)task->proxy_ctx.modified_body_len;
+		int ret;
+
+		ret = VDP_bytes(vdc, act, out_ptr, out_len);
+		free(task->proxy_ctx.modified_body);
+		task->proxy_ctx.modified_body = NULL;
+		task->proxy_ctx.modified_body_len = 0;
+		task->proxy_ctx.body_modified = 0;
+		return (ret);
+	}
+
 	return (VDP_bytes(vdc, act, ptr, len));
 }
 
@@ -395,45 +413,18 @@ vdp_wasm_chain_bytes(struct vdp_ctx *vdc, enum vdp_action act,
 		if (task->store == NULL || task->phase_body_fn == NULL)
 			continue;
 
-		/* Write data into guest memory via allocator */
-		if (task->proxy_ctx.allocator_valid &&
-		    task->proxy_ctx.memory_valid) {
-			wasmtime_val_t alloc_args[1];
-			wasmtime_val_t alloc_result[1];
-			uint8_t *mem_data;
-			size_t mem_size;
-			int32_t guest_ptr;
-
-			alloc_args[0].kind = WASMTIME_I32;
-			alloc_args[0].of.i32 = (int32_t)current_len;
-
-			error = wasmtime_func_call(task->context,
-			    &task->proxy_ctx.allocator,
-			    alloc_args, 1, alloc_result, 1, &trap);
-			if (error != NULL || trap != NULL) {
-				if (error) wasmtime_error_delete(error);
-				if (trap) wasm_trap_delete(trap);
-				continue;
-			}
-
-			guest_ptr = alloc_result[0].of.i32;
-			mem_data = wasmtime_memory_data(task->context,
-			    &task->proxy_ctx.memory);
-			mem_size = wasmtime_memory_data_size(task->context,
-			    &task->proxy_ctx.memory);
-
-			if (guest_ptr >= 0 &&
-			    (size_t)guest_ptr + (size_t)current_len <= mem_size)
-				memcpy(mem_data + guest_ptr, current_data,
-				    (size_t)current_len);
-		}
+		task->proxy_ctx.response_body = current_data;
+		task->proxy_ctx.response_body_len = (size_t)current_len;
 
 		/* Call proxy_on_response_body */
 		if (!wasmtime_instance_export_get(task->context,
 		    &task->instance, task->phase_body_fn,
 		    strlen(task->phase_body_fn), &item) ||
-		    item.kind != WASMTIME_EXTERN_FUNC)
+		    item.kind != WASMTIME_EXTERN_FUNC) {
+			task->proxy_ctx.response_body = NULL;
+			task->proxy_ctx.response_body_len = 0;
 			continue;
+		}
 
 		args[0].kind = WASMTIME_I32;
 		args[0].of.i32 = (int32_t)task->proxy_ctx.stream_context_id;
@@ -458,7 +449,13 @@ vdp_wasm_chain_bytes(struct vdp_ctx *vdc, enum vdp_action act,
 			current_data = task->proxy_ctx.modified_body;
 			current_len = (ssize_t)task->proxy_ctx.modified_body_len;
 			task->proxy_ctx.body_modified = 0;
+		} else if (task->proxy_ctx.body_modified) {
+			current_data = NULL;
+			current_len = 0;
+			task->proxy_ctx.body_modified = 0;
 		}
+		task->proxy_ctx.response_body = NULL;
+		task->proxy_ctx.response_body_len = 0;
 	}
 
 	return (VDP_bytes(vdc, act, current_data, current_len));

@@ -64,6 +64,7 @@ client c1 {
     rxresp
     expect resp.status == 200
     expect resp.http.X-Chain-Result == "0"
+    expect resp.http.X-Transform == "applied"
 } -run
 
 # Test: single-module chain succeeds

@@ -157,7 +157,10 @@ Set maximum linear memory a Wasm module can allocate.
 
 ### `wasm.set_store_pool_size(module, size)`
 
-Pre-warm a fixed number of Wasmtime stores for a loaded module.
+Pre-warm a fixed number of Wasmtime stores for a loaded module. Modules that
+export `_initialize` are left on the fresh-store path because they can keep
+mutable state outside linear memory; the pool reset can safely restore only
+linear memory.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
