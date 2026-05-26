@@ -23,6 +23,21 @@ Short `scripts/perf-test.sh` run across baseline proxying, raw Wasm execution,
 Proxy-Wasm header callbacks, response-body inspection, and response-body
 rewrite. [Watch the MP4](docs/assets/vmod-wasm-perf-demo.mp4).
 
+### Proxy-Wasm Live Validation
+
+The conference-kit live demo records the production-style Proxy-Wasm path:
+VCL loads an edge-security filter, applies runtime controls, sends real HTTP
+requests, and prints guest metrics, host execution stats, and HTTP pool stats.
+
+[Watch the recorded live demo](https://github.com/RamazanKara/vmod-wasm-conference-kit/blob/main/media/vmod-wasm-live-demo.mp4)
+or verify it from the conference kit with:
+
+```bash
+git clone https://github.com/RamazanKara/vmod-wasm-conference-kit.git
+cd vmod-wasm-conference-kit
+sha256sum -c media/vmod-wasm-live-demo.mp4.sha256
+```
+
 ## Features
 
 - Load `.wasm` modules at VCL init time
