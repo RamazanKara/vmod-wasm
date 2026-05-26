@@ -1,6 +1,12 @@
-# Edge Security Filter
+# Edge Security Filter Reference
 
-A production-grade Proxy-Wasm module demonstrating the full vmod-wasm ABI surface with a realistic edge security and observability use case.
+This directory is the vmod-wasm integration-test reference for the standalone
+[vmod-wasm Edge Security Filter](https://github.com/RamazanKara/vmod-wasm-edge-security-filter).
+
+Use the standalone repository and its release assets for production deployment.
+This in-tree copy intentionally stays close to the VMOD test suite so vmod-wasm
+can keep exercising Proxy-Wasm headers, body callbacks, shared data, metrics,
+HTTP callouts, and local responses without depending on a network checkout.
 
 ## Features
 

@@ -2,7 +2,7 @@
 name = "edge-security-filter"
 version = "1.0.0"
 edition = "2021"
-description = "Production-grade edge security and observability filter for vmod-wasm"
+description = "Reference edge security and observability filter for vmod-wasm tests"
 license = "BSD-2-Clause"
 
 [lib]

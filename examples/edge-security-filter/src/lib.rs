@@ -1,4 +1,4 @@
-//! Edge Security Filter — a production-grade Proxy-Wasm module for vmod-wasm.
+//! Edge Security Filter reference module for vmod-wasm integration tests.
 //!
 //! Demonstrates the full Proxy-Wasm ABI v0.2.1 surface:
 //! - Request/response header manipulation
