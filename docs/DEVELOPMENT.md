@@ -1,6 +1,8 @@
 # Development Guide
 
 How to write, build, test, and deploy Proxy-Wasm modules for vmod-wasm.
+Use this guide when you are building a new module or adapting an existing
+Proxy-Wasm HTTP filter to Varnish.
 
 ## Prerequisites
 
@@ -14,13 +16,12 @@ How to write, build, test, and deploy Proxy-Wasm modules for vmod-wasm.
 ```
 examples/
 ├── Cargo.toml              # Workspace root
-├── rust/                   # Raw host-function module (testing)
-├── proxy-wasm-filter/      # Simple Proxy-Wasm SDK filter
-├── passthrough/            # No-op passthrough module
-├── transform/              # Header-adding transform module
-└── edge-security-filter/   # Production-grade security filter
+├── rust/                   # Raw host-function and execution-limit module
+├── proxy-wasm-filter/      # Small Proxy-Wasm SDK starter filter
+├── passthrough/            # No-op raw Proxy-Wasm lifecycle baseline
+├── transform/              # Raw response-header transform module
+└── edge-security-filter/   # Realistic security-filter reference fixture
     ├── Cargo.toml
-    ├── config.json         # Example configuration
     ├── README.md
     └── src/
         ├── lib.rs          # Module entry point + HTTP context
@@ -119,7 +120,10 @@ Output: `examples/target/wasm32-unknown-unknown/release/my_filter.wasm`
 
 ## Available Proxy-Wasm ABI Functions
 
-The HTTP filter portions of the [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) are available. gRPC, L4 stream callbacks, and foreign-function calls are registered only where useful for SDK link compatibility and are not backed by Varnish behavior.
+The HTTP filter portions of the
+[Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) are available.
+gRPC, L4 stream callbacks, and foreign-function calls are registered only where
+useful for SDK link compatibility and are not backed by Varnish behavior.
 
 ### Root Context Callbacks
 
@@ -168,6 +172,7 @@ upstream responds) and then invokes `on_http_call_response` _after_
 ```rust
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
+use std::time::Duration;
 
 struct MyFilter {
     awaiting_auth: bool,

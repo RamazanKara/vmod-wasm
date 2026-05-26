@@ -164,7 +164,10 @@ Large binaries may indicate inclusion of unexpected code or debug info:
 
 ### Edge Security Filter Threat Model
 
-The `edge-security-filter` module handles untrusted input:
+The in-tree `examples/edge-security-filter` module is a reference fixture. The
+production product lives in the standalone
+`vmod-wasm-edge-security-filter` repository, but both handle the same classes of
+untrusted input:
 
 | Threat | Mitigation |
 |--------|-----------|
@@ -172,5 +175,5 @@ The `edge-security-filter` module handles untrusted input:
 | Rate limit bypass (IP spoofing) | Relies on trusted `X-Forwarded-For` from upstream load balancer |
 | Shared data exhaustion | Time-bucketed keys; old buckets naturally expire |
 | Auth service DoS | HTTP call limit + timeout; circuit breaker in http_pool |
-| Config injection | JSON parser with strict schema; unknown fields ignored |
+| Config injection | The product validates and rejects unknown fields; the fixture falls back to defaults on malformed JSON |
 | Integer overflow in counters | u64 counters; overflow at 2^64 is not reachable |

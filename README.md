@@ -11,9 +11,18 @@ A Varnish VMOD that executes WebAssembly modules for HTTP request processing at 
 
 ## Overview
 
-vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) runtime into Varnish Cache 9.x, allowing you to write edge logic in **Rust**, **Go**, or **AssemblyScript**, compile it to WebAssembly, and execute it during request/response processing.
+vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) runtime into Varnish
+Cache 9.x. It lets you write edge logic in **Rust**, **Go**, or
+**AssemblyScript**, compile it to WebAssembly, and run it from VCL during
+request and response processing.
 
-It includes an HTTP-focused [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) implementation for running standard Wasm filters on Varnish, plus a raw host-function path for small purpose-built modules.
+It includes an HTTP-focused
+[Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) implementation for
+running standard Wasm filters on Varnish, plus a raw host-function path for
+small purpose-built modules.
+
+Use it when logic is too reusable or stateful for comfortable VCL, but adding a
+separate service hop would be slower or harder to operate.
 
 ## Demo
 
@@ -37,8 +46,11 @@ and prints guest metrics, host execution stats, and HTTP pool stats.
 
 - Load `.wasm` modules at VCL init time
 - Call exported Wasm functions from VCL
-- Proxy-Wasm ABI v0.2.1 HTTP filter support (header maps, trailers, buffers, HTTP callouts, properties, shared data, metrics, tick timer, stream control)
-- Deferred `proxy_on_http_call_response` callback — invoked after `on_http_request_headers` returns (avoids proxy-wasm SDK re-entrancy)
+- Proxy-Wasm ABI v0.2.1 HTTP filter support: header maps, trailers, buffers,
+  HTTP callouts, properties, shared data, metrics, tick timer, and stream
+  control
+- Deferred `proxy_on_http_call_response` callback, invoked after
+  `on_http_request_headers` returns to avoid proxy-wasm SDK re-entrancy
 - WASI support (`fd_write`, `clock_time_get`, `random_get` with real implementations)
 - Epoch-based execution time limits (low-overhead, no per-instruction cost)
 - Memory limits (default 16 MiB)
@@ -112,8 +124,10 @@ sub vcl_deliver {
 ## Writing Wasm Modules
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for a complete guide and the
-[`examples/`](examples/) directory for working modules including the
-[edge-security-filter](examples/edge-security-filter/).
+[`examples/`](examples/) directory for focused Rust/Wasm modules. The in-tree
+[edge-security-filter](examples/edge-security-filter/) is a reference fixture;
+the production edge-security product is maintained in its
+[standalone repository](https://github.com/RamazanKara/vmod-wasm-edge-security-filter).
 
 For host function signatures and Proxy-Wasm ABI coverage, see
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
@@ -168,6 +182,13 @@ and response-body inspection/rewrite paths. Logs and NDJSON results are written
 under `perf-logs/`.
 
 ## Documentation
+
+- Start with the [Production Guide](docs/PRODUCTION.md) if you are deciding how
+  to run this safely.
+- Start with the [Development Guide](docs/DEVELOPMENT.md) if you are writing a
+  module.
+- Use the [Compatibility Matrix](docs/COMPATIBILITY.md) to check whether an
+  existing Proxy-Wasm filter can run unchanged.
 
 - [Development Guide](docs/DEVELOPMENT.md) — Writing, building, and testing Proxy-Wasm modules
 - [Configuration Reference](docs/CONFIGURATION.md) — All VCL functions with parameters
