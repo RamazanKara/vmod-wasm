@@ -31,12 +31,7 @@ and prints guest metrics, host execution stats, and HTTP pool stats.
 
 <video controls src="docs/assets/proxy-wasm-live-validation.mp4" title="Proxy-Wasm live validation demo"></video>
 
-[Watch the MP4](docs/assets/proxy-wasm-live-validation.mp4) or verify the
-checked-in artifact:
-
-```bash
-sha256sum -c docs/assets/proxy-wasm-live-validation.mp4.sha256
-```
+[Watch the MP4](docs/assets/proxy-wasm-live-validation.mp4).
 
 ## Features
 
