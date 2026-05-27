@@ -67,7 +67,8 @@ following security considerations:
 
 ### Body Access
 - `proxy_get_buffer_bytes`: Read-only access to request/response body
-- `proxy_set_buffer_bytes`: Can rewrite response body chunks in the VDP; request-body replacements are visible to later module reads
+- `proxy_set_buffer_bytes`: Can rewrite response body chunks in the VDP;
+  request-body replacements are visible to later module reads
 - Body modification is per-request, not persistent
 
 ### Property Access
@@ -177,5 +178,5 @@ untrusted input:
 | Rate limit bypass (IP spoofing) | Relies on trusted `X-Forwarded-For` from upstream load balancer |
 | Shared data exhaustion | Time-bucketed keys; old buckets naturally expire |
 | Auth service DoS | HTTP call limit + timeout; circuit breaker in http_pool |
-| Config injection | The product validates and rejects unknown fields; the fixture falls back to defaults on malformed JSON |
+| Config injection | Product config rejects unknown fields; the fixture falls back to defaults on malformed JSON |
 | Integer overflow in counters | u64 counters; overflow at 2^64 is not reachable |

@@ -7,13 +7,17 @@ at once.
 
 ## Module Map
 
-| Module | ABI style | What it is good for |
-|--------|-----------|---------------------|
-| [`rust/`](rust/) | Native vmod-wasm host functions plus raw Proxy-Wasm ABI | Learning the low-level imports exposed by vmod-wasm and testing execution limits |
-| [`proxy-wasm-filter/`](proxy-wasm-filter/) | Rust `proxy-wasm` SDK | A readable starter filter with request, response, local response, and body callbacks |
-| [`passthrough/`](passthrough/) | Raw Proxy-Wasm ABI | Baseline lifecycle module for smoke tests and overhead checks |
-| [`transform/`](transform/) | Raw Proxy-Wasm ABI | Minimal response-header mutation without the SDK |
-| [`edge-security-filter/`](edge-security-filter/) | Rust `proxy-wasm` SDK | Integration-test fixture covering config, metrics, shared data, callouts, body callbacks, and local responses |
+- [`rust/`](rust/) uses native vmod-wasm host functions plus a small raw
+  Proxy-Wasm ABI filter. Read it when you want low-level imports or execution
+  limit tests.
+- [`proxy-wasm-filter/`](proxy-wasm-filter/) uses the Rust `proxy-wasm` SDK.
+  Read it first if you want the normal SDK shape.
+- [`passthrough/`](passthrough/) is a no-op raw Proxy-Wasm ABI module for
+  lifecycle smoke tests and overhead checks.
+- [`transform/`](transform/) is a minimal response-header mutation using direct
+  Proxy-Wasm ABI imports.
+- [`edge-security-filter/`](edge-security-filter/) is the realistic fixture:
+  config, metrics, shared data, callouts, body callbacks, and local responses.
 
 For production edge security deployments, use the standalone
 [vmod-wasm Edge Security Filter](https://github.com/RamazanKara/vmod-wasm-edge-security-filter)

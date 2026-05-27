@@ -162,7 +162,8 @@ Proxy-Wasm HTTP callouts (`proxy_http_call`) reuse connections via an internal p
 - Blocking TCP sockets from the Varnish worker thread executing the filter
 - Default pool size: 16 persistent connections; configurable with `wasm.set_http_pool_size(size)`
 - Circuit breaker: after N consecutive failures, short-circuit for cooldown period
-- SSRF prevention: upstream allowlist plus private/internal IP checks for non-allowlisted destinations after DNS resolution
+- SSRF prevention: upstream allowlist plus private/internal IP checks for
+  non-allowlisted destinations after DNS resolution
 
 ### Deferred HTTP Callout Callback
 

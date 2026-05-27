@@ -44,6 +44,7 @@ path:
 
 ```vcl
 import wasm;
+import std;
 
 sub vcl_init {
     wasm.load("edge", "/etc/varnish/wasm/edge_security_filter.wasm");
@@ -61,7 +62,7 @@ sub vcl_recv {
 
     set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request("edge");
     if (req.http.X-Wasm-Action != "0") {
-        return (synth(403, "Blocked"));
+        return (synth(std.integer(req.http.X-Wasm-Action, 403), "Blocked"));
     }
 }
 ```
