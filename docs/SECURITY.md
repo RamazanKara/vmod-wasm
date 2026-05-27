@@ -2,8 +2,9 @@
 
 ## Overview
 
-vmod-wasm isolates untrusted Wasm code within a sandboxed runtime.
-This document describes the security boundaries and controls.
+vmod-wasm isolates untrusted Wasm code within a sandboxed runtime. This
+document describes the security boundaries, defaults, and production controls
+that matter before you allow modules to process real traffic.
 
 ## Isolation Guarantees
 
@@ -15,7 +16,8 @@ This document describes the security boundaries and controls.
 ### Execution Isolation
 - Epoch-based time limits prevent infinite loops and CPU exhaustion
 - Each request gets a fresh instance — no state leakage between requests
-- Wasm modules cannot access the filesystem, network, or system calls
+- Wasm modules cannot directly access the filesystem, network, or host system
+  calls
 - All host interaction goes through explicitly defined host functions
 
 ### Network Isolation

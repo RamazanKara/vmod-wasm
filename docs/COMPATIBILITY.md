@@ -4,6 +4,9 @@
 
 This document tracks the implementation status of the
 [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) specification.
+Use it to check whether an existing HTTP Proxy-Wasm filter can run on Varnish
+without redesign. Unsupported gRPC, L4, and foreign-function surfaces are
+registered for SDK link compatibility only.
 
 ## Runtime Support
 

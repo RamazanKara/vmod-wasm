@@ -2,7 +2,8 @@
 
 ## Overview
 
-vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) WebAssembly runtime into Varnish Cache as a VMOD (Varnish Module). It supports two execution models:
+vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) WebAssembly runtime into
+Varnish Cache as a VMOD (Varnish Module). It supports two execution models:
 
 1. **Raw host-function modules** — Wasm modules that import/export C-ABI functions directly
 2. **Proxy-Wasm ABI modules** — Standard filters using the [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec)
@@ -127,7 +128,9 @@ mutating the module set used by older traffic.
 
 ### Store Pooling
 
-Instead of creating a new Wasmtime instance per request, vmod-wasm pre-creates a pool of instances at VCL init time. This eliminates compilation latency from the request path.
+Instead of creating a new Wasmtime instance per request, vmod-wasm pre-creates
+a pool of instances at VCL init time. This eliminates compilation latency from
+the request path.
 
 - Default pool size: 8 stores per module
 - Configurable with `wasm.set_store_pool_size(module, size)` after `wasm.load()`
@@ -142,7 +145,10 @@ and instance. The pool is an optimization, not a correctness dependency.
 
 ### Epoch-Based Time Limits
 
-Unlike fuel-based metering (which adds per-instruction overhead), epoch interruption uses a background thread that increments a global epoch counter. When a Wasm execution exceeds its deadline, the next epoch check traps the execution.
+Unlike fuel-based metering, which adds per-instruction overhead, epoch
+interruption uses a background thread that increments a global epoch counter.
+When a Wasm execution exceeds its deadline, the next epoch check traps the
+execution.
 
 - Zero overhead during normal execution
 - Background ticker thread (1ms resolution)

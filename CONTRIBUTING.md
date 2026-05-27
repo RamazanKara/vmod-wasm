@@ -122,12 +122,12 @@ test: add VTC for bot detection edge case
 Stable release tags include the supported Varnish ABI line:
 
 ```shell
-git tag varnish9-v4.3.3
-git push origin varnish9-v4.3.3
+git tag varnish9-vX.Y.Z
+git push origin varnish9-vX.Y.Z
 ```
 
-The package version remains semantic (`4.3.3`); the tag prefix makes the Varnish
-support line explicit for release assets.
+The package version remains semantic (`X.Y.Z`); the tag prefix makes the
+Varnish support line explicit for release assets.
 
 ## Reporting Issues
 

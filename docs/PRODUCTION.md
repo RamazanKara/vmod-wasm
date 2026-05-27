@@ -3,8 +3,9 @@
 ## Overview
 
 vmod-wasm embeds a WebAssembly runtime (Wasmtime) into Varnish Cache,
-enabling request/response processing via compiled Wasm modules. This
-document covers production deployment considerations.
+enabling request/response processing via compiled Wasm modules. This guide is
+for operators deciding how to install, constrain, monitor, reload, and roll back
+Wasm filters in production.
 
 The stable release support target is Varnish 9.x on Linux `amd64` and `arm64`.
 GitHub binary bundles include the Wasmtime 44.0.0 runtime library used at build
@@ -33,6 +34,36 @@ Then verify linkage before traffic:
 
 ```bash
 ldd /usr/lib/varnish/vmods/libvmod_wasm.so | grep libwasmtime
+```
+
+## Minimal Production Shape
+
+A production VCL should load modules only in `vcl_init`, set explicit runtime
+limits, fail closed for security decisions, and expose metrics on an internal
+path:
+
+```vcl
+import wasm;
+
+sub vcl_init {
+    wasm.load("edge", "/etc/varnish/wasm/edge_security_filter.wasm");
+    wasm.set_epoch_deadline(100);
+    wasm.set_memory_limit(8388608);
+    wasm.set_allowed_upstreams("auth.internal:8080");
+    wasm.set_http_call_limit(3);
+    wasm.set_fail_mode("closed");
+}
+
+sub vcl_recv {
+    if (req.url == "/__wasm_metrics" && req.http.X-Internal == "true") {
+        return (synth(200, "Metrics"));
+    }
+
+    set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request("edge");
+    if (req.http.X-Wasm-Action != "0") {
+        return (synth(403, "Blocked"));
+    }
+}
 ```
 
 ## Resource Limits
@@ -194,6 +225,7 @@ sub vcl_deliver {
   `proxy_on_response_body` as they arrive — no buffering
 - Each chunk is forwarded to the client immediately after inspection
 - `end_of_stream=1` is set on the final chunk
+- Memory usage is O(chunk_size), not O(body_size)
 
 ## Module Lifecycle Management
 
@@ -351,7 +383,6 @@ so budget for at least two loaded VCL generations during deployment.
 | Security filter (bot + rate limit) | 100ms | 8 MiB | 0 |
 | Auth validation (with callout) | 200ms | 8 MiB | 3 |
 | Complex transform (body inspection) | 500ms | 16 MiB | 5 |
-- Memory usage is O(chunk_size), not O(body_size)
 
 ## Upgrading Modules
 

@@ -2,6 +2,16 @@
 
 Complete reference for all vmod-wasm VCL functions and their parameters.
 
+Most production VCL only needs four groups:
+
+- load modules with `wasm.load()`
+- set resource limits with `wasm.set_epoch_deadline()` and
+  `wasm.set_memory_limit()`
+- restrict HTTP callouts with `wasm.set_allowed_upstreams()` and
+  `wasm.set_http_call_limit()`
+- expose observability with `wasm.get_metrics_json()` and
+  `wasm.get_stats_json()`
+
 ## Support And Scope
 
 The stable release line targets Varnish 9.x with Wasmtime C API 44.0.0.
@@ -255,14 +265,15 @@ Behavior when Wasm execution encounters an error.
 
 Return all Proxy-Wasm metrics as a JSON string.
 
-**Returns**: STRING (JSON object with metric names as keys and values as numbers)
+**Returns**: STRING (JSON object with metric names as keys and metric records
+as values)
 
 **Example output**:
 ```json
 {
-  "edge_requests_total": 15234,
-  "edge_blocked_total": 42,
-  "edge_rate_limited_total": 7
+  "edge_requests_total": {"type": "counter", "value": 15234},
+  "edge_blocked_total": {"type": "counter", "value": 42},
+  "edge_rate_limited_total": {"type": "counter", "value": 7}
 }
 ```
 
