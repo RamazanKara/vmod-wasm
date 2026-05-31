@@ -183,19 +183,17 @@ under `perf-logs/`.
 
 ## Documentation
 
-- Start with the [Production Guide](docs/PRODUCTION.md) if you are deciding how
-  to run this safely.
-- Start with the [Development Guide](docs/DEVELOPMENT.md) if you are writing a
-  module.
-- Use the [Compatibility Matrix](docs/COMPATIBILITY.md) to check whether an
-  existing Proxy-Wasm filter can run unchanged.
+Use the [Documentation Guide](docs/README.md) as the reading map. The short
+version:
 
-- [Development Guide](docs/DEVELOPMENT.md) — Writing, building, and testing Proxy-Wasm modules
-- [Configuration Reference](docs/CONFIGURATION.md) — All VCL functions with parameters
-- [Architecture](docs/ARCHITECTURE.md) — Component design and request lifecycle
-- [Proxy-Wasm Compatibility](docs/COMPATIBILITY.md) — ABI coverage matrix
-- [Security Model](docs/SECURITY.md) — Isolation, threat model, supply chain security
-- [Production Guide](docs/PRODUCTION.md) — Deployment, hot-reload, monitoring, capacity planning
+- [Production Guide](docs/PRODUCTION.md) — install, constrain, monitor, reload,
+  and roll back vmod-wasm safely.
+- [Development Guide](docs/DEVELOPMENT.md) — write, build, and test
+  Proxy-Wasm modules.
+- [Compatibility Matrix](docs/COMPATIBILITY.md) — check ABI coverage before
+  porting an existing Proxy-Wasm filter.
+- [Configuration Reference](docs/CONFIGURATION.md) — exact `wasm.*` VCL API,
+  defaults, return values, and valid scopes.
 
 ## License
 

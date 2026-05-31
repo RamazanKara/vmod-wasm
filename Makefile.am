@@ -26,7 +26,6 @@ EXTRA_DIST = \
 	autogen.sh \
 	scripts/perf-test.sh \
 	scripts/soak-test.sh \
-	.github/dependabot.yml \
 	.github/PULL_REQUEST_TEMPLATE.md \
 	.github/ISSUE_TEMPLATE/bug_report.md \
 	.github/ISSUE_TEMPLATE/config.yml \
@@ -38,18 +37,27 @@ EXTRA_DIST = \
 	docs/CONFIGURATION.md \
 	docs/DEVELOPMENT.md \
 	docs/PRODUCTION.md \
+	docs/README.md \
 	docs/SECURITY.md \
+	docs/assets/proxy-wasm-live-validation.mp4 \
+	docs/assets/proxy-wasm-live-validation.mp4.sha256 \
+	docs/assets/vmod-wasm-perf-demo.gif \
+	docs/assets/vmod-wasm-perf-demo.mp4 \
 	examples/Cargo.lock \
 	examples/Cargo.toml \
 	examples/README.md \
 	examples/rustfmt.toml \
 	examples/rust/Cargo.toml \
+	examples/rust/README.md \
 	examples/rust/src/lib.rs \
 	examples/proxy-wasm-filter/Cargo.toml \
+	examples/proxy-wasm-filter/README.md \
 	examples/proxy-wasm-filter/src/lib.rs \
 	examples/passthrough/Cargo.toml \
+	examples/passthrough/README.md \
 	examples/passthrough/src/lib.rs \
 	examples/transform/Cargo.toml \
+	examples/transform/README.md \
 	examples/transform/src/lib.rs \
 	examples/edge-security-filter/Cargo.toml \
 	examples/edge-security-filter/README.md \

@@ -2,6 +2,15 @@
 
 All notable changes to vmod-wasm will be documented in this file.
 
+## Unreleased
+
+### Changed
+- Added a documentation guide that gives operators and module authors a clearer
+  reading path through production, development, configuration, compatibility,
+  architecture, and security docs.
+- Included documentation media assets and all example README files in the
+  Automake source distribution.
+
 ## [4.3.5] - 2026-05-25
 
 ### Added
