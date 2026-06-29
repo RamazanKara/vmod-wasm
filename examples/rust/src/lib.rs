@@ -5,6 +5,7 @@
 
 // --- Host function imports (provided by vmod-wasm) ---
 
+#[link(wasm_import_module = "env")]
 extern "C" {
     fn get_request_header(
         name_ptr: *const u8,
@@ -272,6 +273,7 @@ pub extern "C" fn compute_sum() -> i32 {
 // with a 403 local response, and adds an X-Wasm-Filter header.
 
 // Proxy-Wasm host function imports (provided by vmod-wasm under "env")
+#[link(wasm_import_module = "env")]
 extern "C" {
     fn proxy_log(level: i32, msg_data: i32, msg_size: i32) -> i32;
 
