@@ -7,6 +7,10 @@
 
 // Import the host function for setting header map values.
 // map_type 2 = HTTP_RESPONSE_HEADERS in the Proxy-Wasm ABI.
+// `wasm_import_module = "env"` makes rust-lld emit this as a Wasm import from
+// the host's "env" module (as the proxy-wasm SDK does) rather than leaving it
+// as an unresolved symbol, which fails linking under `lto = true`.
+#[link(wasm_import_module = "env")]
 extern "C" {
     fn proxy_add_header_map_value(
         map_type: i32,
