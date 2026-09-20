@@ -4,7 +4,7 @@ ARG WASMTIME_VERSION=44.0.0
 
 USER root
 
-# Install build dependencies (Varnish 9 is already installed in base image)
+# Match the development headers to the Varnish package held by the base image.
 RUN apt-get update && apt-get install -y \
     automake \
     autoconf \
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     xz-utils \
-    varnish-dev \
+    "varnish-dev=$(dpkg-query -W -f='${Version}' varnish)" \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Wasmtime C API
