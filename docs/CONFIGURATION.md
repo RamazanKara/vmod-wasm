@@ -14,7 +14,7 @@ Most production VCL only needs four groups:
 
 ## Support And Scope
 
-The stable release line targets Varnish 9.x with Wasmtime C API 44.0.0.
+The stable release line targets Varnish 9.x with Wasmtime C API 49.0.2.
 Configuration functions that change engine state are restricted to `vcl_init`,
 matching Varnish's expectation that loaded VCL objects become immutable on the
 request path.

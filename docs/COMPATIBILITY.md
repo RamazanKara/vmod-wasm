@@ -13,7 +13,7 @@ registered for SDK link compatibility only.
 | Component | Supported |
 |-----------|-----------|
 | Varnish | 9.x |
-| Wasmtime C API | 44.0.0 |
+| Wasmtime C API | 49.0.2 |
 | OS | Linux |
 | Architectures | `amd64`, `arm64` release bundles |
 | Release channel | `varnish9-vX.Y.Z` tags |
