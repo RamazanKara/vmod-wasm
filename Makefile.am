@@ -67,6 +67,7 @@ EXTRA_DIST = \
 	tests/allow_decision.vtc \
 	tests/basic_load.vtc \
 	tests/block_decision.vtc \
+	tests/build-companion-filters.sh \
 	tests/error_handling.vtc \
 	tests/filter_chain.vtc \
 	tests/fuel_exhaustion.vtc \
@@ -76,6 +77,8 @@ EXTRA_DIST = \
 	tests/memory_limit.vtc \
 	tests/pool_stats.vtc \
 	tests/proxy_wasm_block.vtc \
+	tests/proxy_wasm_cache_key_normalizer.vtc \
+	tests/proxy_wasm_cache_key_report.vtc \
 	tests/proxy_wasm_edge_filter_basic.vtc \
 	tests/proxy_wasm_edge_filter_bot.vtc \
 	tests/proxy_wasm_edge_filter_callout.vtc \
@@ -83,10 +86,12 @@ EXTRA_DIST = \
 	tests/proxy_wasm_edge_filter_metrics.vtc \
 	tests/proxy_wasm_edge_filter_ratelimit.vtc \
 	tests/proxy_wasm_lifecycle.vtc \
+	tests/proxy_wasm_jwt_validator.vtc \
 	tests/proxy_wasm_metrics.vtc \
 	tests/proxy_wasm_response.vtc \
 	tests/proxy_wasm_response_body.vtc \
 	tests/proxy_wasm_sdk.vtc \
+	tests/proxy_wasm_signature_verifier.vtc \
 	tests/proxy_wasm_security.vtc \
 	tests/resource_config.vtc \
 	tests/vcl_reload_lifecycle.vtc \
@@ -114,6 +119,8 @@ build-wasm-test-fixtures:
 	@cp "$(WASM_RELEASE_DIR)/passthrough.wasm" "$(WASM_FIXTURE_DIR)/"
 	@cp "$(WASM_RELEASE_DIR)/transform.wasm" "$(WASM_FIXTURE_DIR)/"
 	@cp "$(WASM_RELEASE_DIR)/edge_security_filter.wasm" "$(WASM_FIXTURE_DIR)/"
+	@CARGO="$(CARGO)" $(SHELL) "$(abs_top_srcdir)/tests/build-companion-filters.sh" \
+		"$(WASM_TARGET_DIR)" "$(WASM_FIXTURE_DIR)/companions"
 
 lint:
 	cd "$(abs_top_srcdir)/examples" && "$(CARGO)" fmt --all --check
@@ -157,6 +164,9 @@ check-local: build-wasm-test-fixtures
 				-Dwasm_transform="$(WASM_FIXTURE_DIR)/transform.wasm" \
 				-Dsdk_module="$(WASM_FIXTURE_DIR)/proxy_wasm_filter.wasm" \
 				-Dedge_filter="$(WASM_FIXTURE_DIR)/edge_security_filter.wasm" \
+				-Djwt_filter="$(WASM_FIXTURE_DIR)/companions/proxy_wasm_jwt_validator.wasm" \
+				-Dsignature_filter="$(WASM_FIXTURE_DIR)/companions/proxy_wasm_signature_verifier.wasm" \
+				-Dcache_key_filter="$(WASM_FIXTURE_DIR)/companions/proxy_wasm_cache_key_normalizer.wasm" \
 				$$t || exit 1; \
 		done; \
 	else \

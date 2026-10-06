@@ -1,0 +1,245 @@
+varnishtest "proxy-wasm-jwt-validator: validate JWT and API tokens via vmod-wasm"
+
+server s1 {
+    rxreq
+    expect req.url == "/jwt"
+    expect req.http.X-Auth-Status == "verified"
+    expect req.http.X-Auth-Token-Type == "jwt"
+    expect req.http.X-Auth-Key-Id == "test-key"
+    expect req.http.X-Auth-Subject == "user-123"
+    expect req.http.X-Auth-Issuer == "https://issuer.example"
+    expect req.http.X-Auth-Scopes == "read write"
+    expect req.http.Authorization == <undef>
+    expect req.http.X-API-Token == <undef>
+    txresp -status 200 -body "JWT OK"
+
+    rxreq
+    expect req.url == "/jwt-rs256"
+    expect req.http.X-Auth-Status == "verified"
+    expect req.http.X-Auth-Token-Type == "jwt"
+    expect req.http.X-Auth-Key-Id == "rsa-test-key"
+    expect req.http.X-Auth-Subject == "user-rsa"
+    expect req.http.X-Auth-Issuer == "https://issuer.example"
+    expect req.http.X-Auth-Scopes == "read write"
+    expect req.http.Authorization == <undef>
+    txresp -status 200 -body "RS256 OK"
+
+    rxreq
+    expect req.url == "/api"
+    expect req.http.X-Auth-Status == "verified"
+    expect req.http.X-Auth-Token-Type == "api-token"
+    expect req.http.X-Auth-Key-Id == "internal"
+    expect req.http.X-Auth-Subject == "service-a"
+    expect req.http.X-Auth-Scopes == "read"
+    expect req.http.X-Auth-Issuer == <undef>
+    expect req.http.X-API-Token == <undef>
+    txresp -status 200 -body "API OK"
+
+    rxreq
+    expect req.url == "/report"
+    expect req.http.X-Auth-Status == "malformed-jwt"
+    expect req.http.X-Auth-Token-Type == <undef>
+    expect req.http.X-Auth-Key-Id == <undef>
+    expect req.http.X-Auth-Subject == <undef>
+    expect req.http.X-Auth-Issuer == <undef>
+    expect req.http.X-Auth-Scopes == <undef>
+    expect req.http.Authorization == <undef>
+    expect req.http.X-API-Token == <undef>
+    txresp -body "REPORT OK"
+
+    rxreq
+    expect req.url == "/quiet"
+    expect req.http.X-Auth-Status == <undef>
+    expect req.http.X-Auth-Token-Type == <undef>
+    expect req.http.X-Auth-Key-Id == <undef>
+    expect req.http.X-Auth-Subject == <undef>
+    expect req.http.X-Auth-Issuer == <undef>
+    expect req.http.X-Auth-Scopes == <undef>
+    txresp -body "QUIET OK"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("auth", "${jwt_filter}");
+        wasm.set_epoch_deadline(100);
+        wasm.set_memory_limit(8388608);
+    }
+
+    sub vcl_recv {
+        if (req.url == "/report") {
+            set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request_configured(
+                "auth", "", {"{"mode":"report" }"});
+            return (pass);
+        }
+        if (req.url == "/quiet") {
+            set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request_configured(
+                "auth", "", {"{"mode":"report","emit_headers":false}"});
+            return (pass);
+        }
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request_configured("auth", "",
+                {"{"keys":[{"id":"test-key","secret":"topsecret" }],"jwks":{"keys":[{"kty":"RSA","kid":"rsa-test-key","alg":"RS256","use":"sig","n":"2mdj9UDsk76yaVX1tomwsni1QqCwDYovdSXQtRwsXOBxGOyg0bokCBiQZh5Odtug00n0S-OgBTDtW-6Tx59YcNhAl7tQz4fEm0q_hDzFXfQUZjEhM0yt8-F3y1P8a4d3U0iHBYmvZn2BkTec8n2NY1YiBdTg1BrG6G8Iy3mxB6yim5NsT-K2SdcivaE5SRHnSfCQr53BwzYlJHEu9bQ-O7mQqijJj6RULpmojhjSDaMcDgVCZ89OWiIozH-EbyHVQwsaaFEmpn8-zFTml3QaA1oJNk4_HkPno1aHOZNi4m1ihxzzDwipn4MCnPi4rVWAjJy5FB-6z75CDsjCl_i9Fw","e":"AQAB" }]},"api_tokens":[{"id":"internal","token":"opaque-secret","subject":"service-a","scopes":["read"] }],"issuer":"https://issuer.example","audience":"edge","required_scopes":["read"],"required_claims":{"tier":"gold" },"mode":"enforce" }"});
+
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(401, "Unauthorized"));
+        }
+    }
+
+    sub vcl_synth {
+        set resp.http.X-Wasm-Action = req.http.X-Wasm-Action;
+        set resp.http.X-Auth-Status = req.http.X-Auth-Status;
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Action = req.http.X-Wasm-Action;
+        set resp.http.X-Auth-Status = req.http.X-Auth-Status;
+        set resp.http.X-Auth-Token-Type = req.http.X-Auth-Token-Type;
+        set resp.http.X-Auth-Key-Id = req.http.X-Auth-Key-Id;
+        set resp.http.X-Auth-Subject = req.http.X-Auth-Subject;
+        set resp.http.X-Auth-Issuer = req.http.X-Auth-Issuer;
+        set resp.http.X-Auth-Scopes = req.http.X-Auth-Scopes;
+    }
+} -start
+
+# Valid JWTs expire in 2100; HS256 uses topsecret and RS256 uses the embedded JWK.
+client c1 {
+    txreq -url "/jwt" \
+        -hdr "X-Auth-Subject: forged-user" \
+        -hdr "X-Auth-Scopes: admin" \
+        -hdr "X-API-Token: forged-token" \
+        -hdr "Authorization: Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoiZWRnZSIsInN1YiI6InVzZXItMTIzIiwiZXhwIjo0MTAyNDQ0ODAwLCJuYmYiOjE3MDAwMDAwMDAsInNjb3BlIjoicmVhZCB3cml0ZSIsInRpZXIiOiJnb2xkIn0.kkl8s3QKVmLKl0ncUJHSs8Psl7eEgPW9W9DwmJYiGYw"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "JWT OK"
+    expect resp.http.X-Wasm-Action == "0"
+    expect resp.http.X-Auth-Status == "verified"
+    expect resp.http.X-Auth-Token-Type == "jwt"
+    expect resp.http.X-Auth-Subject == "user-123"
+} -run
+
+client c2 {
+    txreq -url "/jwt-rs256" \
+        -hdr "Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS10ZXN0LWtleSIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoiZWRnZSIsInN1YiI6InVzZXItcnNhIiwiZXhwIjo0MTAyNDQ0ODAwLCJuYmYiOjE3MDAwMDAwMDAsInNjb3BlIjoicmVhZCB3cml0ZSIsInRpZXIiOiJnb2xkIn0.ho9UHPFu93jy9VEgonlC1LkYQ4FrRJG1N25Dw8EhQWux9oySKLkSyV1LAvMnTzsBDOaFE6wz1b9DD96BBzW2FGgEZFbCCDNhc8uUVXgbdykyY6fr8yS7lLzcKPOjKExMfMNLWYoa0HJHr4qSlCI1QFBGlRGEXDFYHfaohnRWyiQvNtFn6UgnOo8oaRFTxuZNgRcVRBVPAqJ-M8Iy3rRu7Pcssib5LTCn4y7W29UAaQBz9I3Caf24nV-46WU6D5LNAisMdPLVzm8JidmihWZb5iuUq8dsvhwpeRwAVg4gJhU3kh34KRGHOARnb01TlKTptp4rI9j5rd3C9b_l5lzZDg"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "RS256 OK"
+    expect resp.http.X-Wasm-Action == "0"
+    expect resp.http.X-Auth-Status == "verified"
+    expect resp.http.X-Auth-Token-Type == "jwt"
+    expect resp.http.X-Auth-Subject == "user-rsa"
+} -run
+
+client c3 {
+    txreq -url "/api" \
+        -hdr "X-Auth-Issuer: forged-issuer" \
+        -hdr "X-API-Token: opaque-secret"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "API OK"
+    expect resp.http.X-Wasm-Action == "0"
+    expect resp.http.X-Auth-Status == "verified"
+    expect resp.http.X-Auth-Token-Type == "api-token"
+    expect resp.http.X-Auth-Subject == "service-a"
+} -run
+
+client c4 {
+    txreq -url "/jwt" \
+        -hdr "Authorization: Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoiZWRnZSIsInN1YiI6InVzZXItMTIzIiwiZXhwIjo0MTAyNDQ0ODAwLCJuYmYiOjE3MDAwMDAwMDAsInNjb3BlIjoicmVhZCB3cml0ZSIsInRpZXIiOiJnb2xkIn0.Akl8s3QKVmLKl0ncUJHSs8Psl7eEgPW9W9DwmJYiGYw"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "invalid-jwt-signature"
+} -run
+
+client c5 {
+    txreq -url "/jwt"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "missing-token"
+} -run
+
+client c6 {
+    txreq -url "/report" \
+        -hdr "Authorization: Bearer not-a-jwt" \
+        -hdr "X-API-Token: forged-token" \
+        -hdr "X-Auth-Status: verified" \
+        -hdr "X-Auth-Token-Type: jwt" \
+        -hdr "X-Auth-Key-Id: admin-key" \
+        -hdr "X-Auth-Subject: admin" \
+        -hdr "X-Auth-Issuer: trusted-issuer" \
+        -hdr "X-Auth-Scopes: admin"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "REPORT OK"
+    expect resp.http.X-Wasm-Action == "0"
+} -run
+
+client c7 {
+    txreq -url "/quiet" \
+        -hdr "X-Auth-Status: verified" \
+        -hdr "X-Auth-Token-Type: jwt" \
+        -hdr "X-Auth-Key-Id: admin-key" \
+        -hdr "X-Auth-Subject: admin" \
+        -hdr "X-Auth-Issuer: trusted-issuer" \
+        -hdr "X-Auth-Scopes: admin"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "QUIET OK"
+    expect resp.http.X-Wasm-Action == "0"
+} -run
+
+client c8 {
+    txreq -url "/jwt" \
+        -hdr "Authorization: Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoiZWRnZSIsInN1YiI6InVzZXItMTIzIiwiZXhwIjoxLCJuYmYiOjE3MDAwMDAwMDAsInNjb3BlIjoicmVhZCB3cml0ZSIsInRpZXIiOiJnb2xkIn0.sh08nvt7H2PyX_pWmYPMxPul9dzkbZHo00dtywPE6uU"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "token-expired"
+
+    txreq -url "/jwt" \
+        -hdr "Authorization: Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoiZWRnZSIsInN1YiI6InVzZXItMTIzIiwiZXhwIjo0MTAyNDQ0ODAwLCJuYmYiOjQxMDI0NDQ4MDAsInNjb3BlIjoicmVhZCB3cml0ZSIsInRpZXIiOiJnb2xkIn0.tCjSc6gAdOulhn4z5rJO4hJI590q-Ad0MmqIUVHD2gQ"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "token-not-yet-valid"
+
+    txreq -url "/jwt" \
+        -hdr "Authorization: Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL290aGVyLmV4YW1wbGUiLCJhdWQiOiJlZGdlIiwic3ViIjoidXNlci0xMjMiLCJleHAiOjQxMDI0NDQ4MDAsIm5iZiI6MTcwMDAwMDAwMCwic2NvcGUiOiJyZWFkIHdyaXRlIiwidGllciI6ImdvbGQifQ.YAWc5iXpCtiWDiDaheZeQNjaSeOS3ob3VXWwwoU5Z-I"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "issuer-mismatch"
+
+    txreq -url "/jwt" \
+        -hdr "Authorization: Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoib3RoZXIiLCJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxNzAwMDAwMDAwLCJzY29wZSI6InJlYWQgd3JpdGUiLCJ0aWVyIjoiZ29sZCJ9.HBYYEEyzXhqVv7-xoZHSC0lE9HrbGnxAwJP3ZfVLU0U"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "audience-mismatch"
+
+    txreq -url "/jwt" \
+        -hdr "Authorization: Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoiZWRnZSIsInN1YiI6InVzZXItMTIzIiwiZXhwIjo0MTAyNDQ0ODAwLCJuYmYiOjE3MDAwMDAwMDAsInNjb3BlIjoid3JpdGUiLCJ0aWVyIjoiZ29sZCJ9.t1cx36cAREIMCLRRPHd0_HXGMJtXExdKbxIMr7JtI3g"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "missing-scope:read"
+
+    txreq -url "/jwt" \
+        -hdr "Authorization: Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoiZWRnZSIsInN1YiI6InVzZXItMTIzIiwiZXhwIjo0MTAyNDQ0ODAwLCJuYmYiOjE3MDAwMDAwMDAsInNjb3BlIjoicmVhZCB3cml0ZSIsInRpZXIiOiJzaWx2ZXIifQ.RNUFzdXwsqdE0JHc7p4sNba85Ba5ayqNnpcKsKbnU7g"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "required-claim-mismatch:tier"
+
+    txreq -url "/api" -hdr "X-API-Token: wrong-token"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Auth-Status == "invalid-api-token"
+} -run
+
+server s1 -wait
+varnish v1 -expect MAIN.backend_req == 5

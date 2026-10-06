@@ -1,0 +1,88 @@
+varnishtest "proxy-wasm-cache-key-normalizer: report mode preserves default cache hash inputs"
+
+server s1 {
+    rxreq
+    expect req.url == "/products//category/../item/?utm_source=ad&b=2&a=1&gclid=x"
+    expect req.http.Host == "EXAMPLE.TEST:80"
+    expect req.http.X-Cache-Key-Normalized == "true"
+    expect req.http.X-Cache-Key == "GET example.test/products/item?a=1&b=2"
+    txresp -body "original request"
+
+    rxreq
+    expect req.url == "/products/item?a=1&b=2"
+    expect req.http.Host == "example.test"
+    expect req.http.X-Cache-Key-Normalized == "false"
+    expect req.http.X-Cache-Key == "GET example.test/products/item?a=1&b=2"
+    txresp -body "canonical request"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("cachekey", "${cache_key_filter}");
+        wasm.set_epoch_deadline(100);
+        wasm.set_memory_limit(8388608);
+    }
+
+    sub vcl_recv {
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request_configured("cachekey", "",
+                {"{"mode":"report","trailing_slash":"strip" }"});
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(500, "Cache key normalizer failed"));
+        }
+        # Observe the filter's Host value before builtin recv lowercases it.
+        return (hash);
+    }
+
+    sub vcl_backend_response {
+        set beresp.ttl = 1h;
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Action = req.http.X-Wasm-Action;
+        set resp.http.X-Cache-Key = req.http.X-Cache-Key;
+        if (obj.hits > 0) {
+            set resp.http.X-Cache = "hit";
+        } else {
+            set resp.http.X-Cache = "miss";
+        }
+    }
+} -start
+
+client c1 {
+    txreq -url "/products//category/../item/?utm_source=ad&b=2&a=1&gclid=x" \
+        -hdr "Host: EXAMPLE.TEST:80"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "original request"
+    expect resp.http.X-Wasm-Action == "0"
+    expect resp.http.X-Cache-Key == "GET example.test/products/item?a=1&b=2"
+    expect resp.http.X-Cache == "miss"
+} -run
+
+client c2 {
+    txreq -url "/products/item?a=1&b=2" -hdr "Host: example.test"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "canonical request"
+    expect resp.http.X-Wasm-Action == "0"
+    expect resp.http.X-Cache-Key == "GET example.test/products/item?a=1&b=2"
+    expect resp.http.X-Cache == "miss"
+} -run
+
+client c3 {
+    txreq -url "/products//category/../item/?utm_source=ad&b=2&a=1&gclid=x" \
+        -hdr "Host: EXAMPLE.TEST:80"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "original request"
+    expect resp.http.X-Wasm-Action == "0"
+    expect resp.http.X-Cache == "hit"
+} -run
+
+server s1 -wait
+varnish v1 -expect MAIN.cache_hit == 1
+varnish v1 -expect MAIN.cache_miss == 2
+varnish v1 -expect MAIN.backend_req == 2

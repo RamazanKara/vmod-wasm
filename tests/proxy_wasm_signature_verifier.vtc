@@ -1,0 +1,207 @@
+varnishtest "proxy-wasm-signature-verifier: HMAC request verification via vmod-wasm"
+
+server s1 {
+    rxreq
+    expect req.url == "/signed?item=1"
+    expect req.http.X-Signature-Status == "verified"
+    expect req.http.X-Signature-Verified == "true"
+    expect req.http.X-Verified-Signature-Key == "test-key"
+    expect req.http.X-Signature == <undef>
+    expect req.http.X-Signature-Timestamp == <undef>
+    expect req.http.X-Signature-Key-Id == <undef>
+    txresp -status 200 -body "GET OK"
+
+    rxreq
+    expect req.method == "POST"
+    expect req.url == "/upload"
+    expect req.body == "hello"
+    expect req.http.X-Signature-Status == "verified"
+    expect req.http.X-Signature-Verified == "true"
+    expect req.http.X-Verified-Signature-Key == "test-key"
+    expect req.http.X-Signature == <undef>
+    expect req.http.X-Signature-Timestamp == <undef>
+    expect req.http.X-Signature-Key-Id == <undef>
+    txresp -status 200 -body "POST OK"
+
+    rxreq
+    expect req.url == "/report"
+    expect req.http.X-Signature-Status == "invalid-signature"
+    expect req.http.X-Signature-Verified == "false"
+    expect req.http.X-Verified-Signature-Key == <undef>
+    expect req.http.X-Signature == <undef>
+    expect req.http.X-Signature-Timestamp == <undef>
+    expect req.http.X-Signature-Key-Id == <undef>
+    txresp -body "REPORT OK"
+
+    rxreq
+    expect req.url == "/quiet"
+    expect req.http.X-Signature-Status == <undef>
+    expect req.http.X-Signature-Verified == <undef>
+    expect req.http.X-Verified-Signature-Key == <undef>
+    txresp -body "QUIET OK"
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
+    import wasm from "${vmod_wasm}";
+
+    sub vcl_init {
+        wasm.load("sig", "${signature_filter}");
+        wasm.set_epoch_deadline(100);
+        wasm.set_memory_limit(8388608);
+    }
+
+    sub vcl_recv {
+        if (req.url == "/report") {
+            set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request_configured(
+                "sig", "", {"{"keys":[{"id":"test-key","secret":"topsecret" }],"max_skew_seconds":0,"mode":"report" }"});
+            return (pass);
+        }
+        if (req.url == "/quiet") {
+            set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request_configured(
+                "sig", "", {"{"keys":[{"id":"test-key","secret":"topsecret" }],"mode":"report","emit_headers":false}"});
+            return (pass);
+        }
+        set req.http.X-Wasm-Action =
+            wasm.proxy_wasm_on_request_configured("sig", "",
+                {"{"keys":[{"id":"test-key","secret":"topsecret" }],"signed_headers":["host"],"max_skew_seconds":0,"mode":"enforce" }"});
+
+        if (req.http.X-Wasm-Action != "0") {
+            return (synth(401, "Bad signature"));
+        }
+    }
+
+    sub vcl_synth {
+        set resp.http.X-Wasm-Action = req.http.X-Wasm-Action;
+        set resp.http.X-Signature-Status = req.http.X-Signature-Status;
+    }
+
+    sub vcl_deliver {
+        set resp.http.X-Wasm-Action = req.http.X-Wasm-Action;
+        set resp.http.X-Signature-Status = req.http.X-Signature-Status;
+        set resp.http.X-Signature-Verified = req.http.X-Signature-Verified;
+        set resp.http.X-Verified-Signature-Key = req.http.X-Verified-Signature-Key;
+    }
+} -start
+
+# Disable timestamp age checks for the fixed HMAC vectors below.
+client c1 {
+    txreq -url "/signed?item=1" \
+        -hdr "Host: example.test" \
+        -hdr "X-Signature: v1=e2cedc28442baab59a9be8b5b4436d63e390e197daee39300baddd3c64a9f936" \
+        -hdr "X-Signature-Timestamp: 1700000000" \
+        -hdr "X-Signature-Key-Id: test-key" \
+        -hdr "X-Signature-Status: forged" \
+        -hdr "X-Signature-Verified: false" \
+        -hdr "X-Verified-Signature-Key: forged-key"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "GET OK"
+    expect resp.http.X-Wasm-Action == "0"
+    expect resp.http.X-Signature-Status == "verified"
+    expect resp.http.X-Signature-Verified == "true"
+    expect resp.http.X-Verified-Signature-Key == "test-key"
+} -run
+
+client c2 {
+    txreq -req POST -url "/upload" \
+        -hdr "Host: example.test" \
+        -hdr "Content-Type: text/plain" \
+        -hdr "X-Signature: f962e226ede7da3910b189b1614d82c50fde700f39bd50981dc868c761f28517" \
+        -hdr "X-Signature-Timestamp: 1700000000" \
+        -hdr "X-Signature-Key-Id: test-key" \
+        -body "hello"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "POST OK"
+    expect resp.http.X-Wasm-Action == "0"
+    expect resp.http.X-Signature-Status == "verified"
+} -run
+
+client c3 {
+    txreq -url "/signed?item=1" \
+        -hdr "Host: example.test" \
+        -hdr "X-Signature: v1=0000000000000000000000000000000000000000000000000000000000000000" \
+        -hdr "X-Signature-Timestamp: 1700000000" \
+        -hdr "X-Signature-Key-Id: test-key"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Signature-Status == "invalid-signature"
+} -run
+
+client c4 {
+    txreq -url "/signed?item=1" \
+        -hdr "Host: example.test" \
+        -hdr "X-Signature-Timestamp: 1700000000" \
+        -hdr "X-Signature-Key-Id: test-key"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Signature-Status == "missing-signature"
+} -run
+
+client c5 {
+    txreq -url "/report" \
+        -hdr "Host: example.test" \
+        -hdr "X-Signature: 0000000000000000000000000000000000000000000000000000000000000000" \
+        -hdr "X-Signature-Timestamp: 1700000000" \
+        -hdr "X-Signature-Key-Id: test-key" \
+        -hdr "X-Signature-Status: verified" \
+        -hdr "X-Signature-Verified: true" \
+        -hdr "X-Verified-Signature-Key: forged-key"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "REPORT OK"
+    expect resp.http.X-Wasm-Action == "0"
+} -run
+
+client c6 {
+    txreq -url "/quiet" \
+        -hdr "X-Signature-Status: verified" \
+        -hdr "X-Signature-Verified: true" \
+        -hdr "X-Verified-Signature-Key: forged-key"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "QUIET OK"
+    expect resp.http.X-Wasm-Action == "0"
+} -run
+
+client c7 {
+    txreq -req POST -url "/upload" \
+        -hdr "Host: example.test" \
+        -hdr "X-Signature: f962e226ede7da3910b189b1614d82c50fde700f39bd50981dc868c761f28517" \
+        -hdr "X-Signature-Timestamp: 1700000000" \
+        -hdr "X-Signature-Key-Id: test-key" \
+        -body "tampered"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Signature-Status == "invalid-signature"
+} -run
+
+client c8 {
+    txreq -url "/signed?item=2" \
+        -hdr "Host: example.test" \
+        -hdr "X-Signature: v1=e2cedc28442baab59a9be8b5b4436d63e390e197daee39300baddd3c64a9f936" \
+        -hdr "X-Signature-Timestamp: 1700000000" \
+        -hdr "X-Signature-Key-Id: test-key"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Signature-Status == "invalid-signature"
+} -run
+
+client c9 {
+    txreq -url "/signed?item=1" \
+        -hdr "Host: other.test" \
+        -hdr "X-Signature: v1=e2cedc28442baab59a9be8b5b4436d63e390e197daee39300baddd3c64a9f936" \
+        -hdr "X-Signature-Timestamp: 1700000000" \
+        -hdr "X-Signature-Key-Id: test-key"
+    rxresp
+    expect resp.status == 401
+    expect resp.http.X-Wasm-Action == "401"
+    expect resp.http.X-Signature-Status == "invalid-signature"
+} -run
+
+server s1 -wait
+varnish v1 -expect MAIN.backend_req == 4
