@@ -4,7 +4,7 @@ A Varnish VMOD that executes WebAssembly modules for HTTP request processing at 
 
 [![License: BSD-2-Clause](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 [![CI](https://github.com/RamazanKara/vmod-wasm/actions/workflows/ci.yml/badge.svg)](https://github.com/RamazanKara/vmod-wasm/actions)
-![Wasmtime](https://img.shields.io/badge/Wasmtime-v44.0.0-blue)
+![Wasmtime](https://img.shields.io/badge/Wasmtime-v49.0.2-blue)
 ![Varnish](https://img.shields.io/badge/Varnish-9.0%2B-purple)
 ![Proxy-Wasm ABI](https://img.shields.io/badge/Proxy--Wasm%20ABI-v0.2.1-green)
 
@@ -137,7 +137,7 @@ For host function signatures and Proxy-Wasm ABI coverage, see
 ### Prerequisites
 
 - Varnish Cache 9.x (with varnishapi dev headers)
-- Wasmtime C API 44.0.0 (libwasmtime)
+- Wasmtime C API 49.0.2 (libwasmtime)
 - autotools, pkg-config, C compiler
 
 ### Build

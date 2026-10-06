@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  WASMTIME_VERSION: 44.0.0
+  WASMTIME_VERSION: 49.0.2
   VARNISH_VERSION: 9.0.3
 
 jobs:
@@ -274,7 +274,7 @@ jobs:
               "git_sha": os.environ["GITHUB_SHA"],
               "support": {
                   "varnish": "9.x",
-                  "wasmtime": "44.0.0",
+                  "wasmtime": "49.0.2",
                   "platforms": ["linux/amd64", "linux/arm64"],
               },
               "builds": metadata,

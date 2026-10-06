@@ -16,6 +16,9 @@ generator against several VCL paths:
   proxy_response_body      proxy_wasm_on_response("pass") + wasm_body VDP
   proxy_response_rewrite   SDK response-body rewrite via set_buffer_bytes
 
+Results include latency percentiles and peak Varnish worker RSS since startup,
+including warmup.
+
 Options:
   --duration SECONDS      Measured duration per case. Default: $DURATION or 10.
   --warmup SECONDS        Warmup duration per case. Default: $WARMUP or 2.
@@ -452,6 +455,18 @@ run_case() {
 		--concurrency "$concurrency" \
 		--path "$path" \
 		--expect "$expect")"
+	worker_pid="$(varnishadm ${admin} pid | awk '/^Worker:/ {print $2}')"
+	result="$(python3 - "$result" "$worker_pid" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result = json.loads(sys.argv[1])
+status = Path(f"/proc/{sys.argv[2]}/status").read_text().splitlines()
+result["peak_rss_kib"] = next(int(line.split()[1]) for line in status if line.startswith("VmHWM:"))
+print(json.dumps(result, sort_keys=True))
+PY
+)"
 	printf '%s\n' "$result" | tee -a /perf-logs/results.ndjson
 	stop_varnish
 }
@@ -492,9 +507,9 @@ import json
 from pathlib import Path
 
 rows = [json.loads(line) for line in Path("/perf-logs/results.ndjson").read_text().splitlines() if line.strip()]
-print("\ncase                       rps      avg_ms  p95_ms  p99_ms  errors")
-print("-------------------------  -------  ------  ------  ------  ------")
+print("\ncase                       rps      avg_ms  p50_ms  p95_ms  p99_ms  peak_rss_mib  errors")
+print("-------------------------  -------  ------  ------  ------  ------  ------------  ------")
 for row in rows:
-    print(f"{row['case']:<25}  {row['rps']:>7.1f}  {row['avg_ms']:>6.3f}  {row['p95_ms']:>6.3f}  {row['p99_ms']:>6.3f}  {row['errors']:>6}")
+    print(f"{row['case']:<25}  {row['rps']:>7.1f}  {row['avg_ms']:>6.3f}  {row['p50_ms']:>6.3f}  {row['p95_ms']:>6.3f}  {row['p99_ms']:>6.3f}  {row['peak_rss_kib'] / 1024:>12.2f}  {row['errors']:>6}")
 PY
 CONTAINER

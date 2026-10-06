@@ -11,7 +11,7 @@ distribution.
 - Project: Wasmtime
 - Upstream: https://github.com/bytecodealliance/wasmtime
 - License: Apache-2.0 WITH LLVM-exception
-- Bundled version: 44.0.0
+- Bundled version: 49.0.2
 
 ## Build-Time And Example Dependencies
 

@@ -1,7 +1,7 @@
 # Documentation Guide
 
 This directory contains the operator, developer, and design documentation for
-vmod-wasm. The project targets Varnish 9.x with Wasmtime 44.0.0, so the docs
+vmod-wasm. The project targets Varnish 9.x with Wasmtime 49.0.2, so the docs
 assume that release contract unless a section says otherwise.
 
 ## Start Here
