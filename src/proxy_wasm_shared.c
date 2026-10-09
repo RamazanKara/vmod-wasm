@@ -94,7 +94,7 @@ vwasm_shared_data_get(struct vwasm_shared_data *sd,
 	pthread_rwlock_rdlock(&sd->rwlock);
 
 	for (entry = sd->buckets[bucket]; entry != NULL; entry = entry->next) {
-		if (strlen(entry->key) == key_len &&
+		if (entry->key_len == key_len &&
 		    memcmp(entry->key, key, key_len) == 0) {
 			/* Found - copy value out */
 			if (entry->value_len > 0 && entry->value != NULL) {
@@ -150,7 +150,7 @@ vwasm_shared_data_set(struct vwasm_shared_data *sd,
 
 	/* Look for existing entry */
 	for (entry = sd->buckets[bucket]; entry != NULL; entry = entry->next) {
-		if (strlen(entry->key) == key_len &&
+		if (entry->key_len == key_len &&
 		    memcmp(entry->key, key, key_len) == 0) {
 			/* CAS check */
 			if (cas != 0 && entry->cas != cas) {
@@ -185,6 +185,7 @@ vwasm_shared_data_set(struct vwasm_shared_data *sd,
 	}
 	memcpy(entry->key, key, key_len);
 	entry->key[key_len] = '\0';
+	entry->key_len = key_len;
 	entry->value = new_val;
 	entry->value_len = value_len;
 	entry->cas = 1;
@@ -267,7 +268,7 @@ vwasm_queue_register(struct vwasm_queue_store *qs,
 
 	/* Check if already exists */
 	for (q = qs->queues; q != NULL; q = q->next) {
-		if (q->name != NULL && strlen(q->name) == name_len &&
+		if (q->name_len == name_len &&
 		    memcmp(q->name, name, name_len) == 0) {
 			id = q->id;
 			pthread_mutex_unlock(&qs->mtx);
@@ -296,6 +297,7 @@ vwasm_queue_register(struct vwasm_queue_store *qs,
 	}
 	memcpy(q->name, name, name_len);
 	q->name[name_len] = '\0';
+	q->name_len = name_len;
 
 	q->vm_id = NULL; /* Will be set by caller if needed */
 	q->id = qs->next_id++;
@@ -324,7 +326,7 @@ vwasm_queue_resolve(struct vwasm_queue_store *qs,
 	pthread_mutex_lock(&qs->mtx);
 
 	for (q = qs->queues; q != NULL; q = q->next) {
-		if (q->name != NULL && strlen(q->name) == name_len &&
+		if (q->name_len == name_len &&
 		    memcmp(q->name, name, name_len) == 0) {
 			id = q->id;
 			pthread_mutex_unlock(&qs->mtx);

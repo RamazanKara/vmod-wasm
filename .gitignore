@@ -25,8 +25,15 @@
 /m4/
 /missing
 /stamp-h1
+/test-driver
 Makefile
 Makefile.in
+
+# Automake unit-test outputs
+/test-suite.log
+/tests/test_proxy_wasm_shared
+/tests/test_proxy_wasm_shared.log
+/tests/test_proxy_wasm_shared.trs
 
 # VMOD generated
 src/vcc_if.c

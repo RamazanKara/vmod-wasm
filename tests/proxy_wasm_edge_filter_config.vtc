@@ -13,13 +13,22 @@ varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
     }
 
     sub vcl_recv {
-        # Config with custom bot pattern "EvilCrawler"
-        set req.http.X-Wasm-Action =
-            wasm.proxy_wasm_on_request_configured("edge", "",
-                {"{"bot_patterns":["EvilCrawler"],"enrich_headers":true}"});
+        if (req.url == "/defaults") {
+            set req.http.X-Wasm-Action =
+                wasm.proxy_wasm_on_request_configured("edge", "", "{}");
+        } else if (req.url == "/zero-window") {
+            set req.http.X-Wasm-Action =
+                wasm.proxy_wasm_on_request_configured("edge", "",
+                    {"{"rate_limit":{"window_seconds":0},"bot_patterns":[]}"});
+        } else {
+            set req.http.X-Wasm-Action =
+                wasm.proxy_wasm_on_request_configured("edge", "",
+                    {"{"bot_patterns":["EvilCrawler"],"enrich_headers":true}"});
+        }
         if (req.http.X-Wasm-Action != "0") {
             return (synth(403, "Blocked"));
         }
+        return (pass);
     }
 
     sub vcl_deliver {
@@ -31,6 +40,18 @@ varnish v1 -arg "-p thread_pool_stack=262144" -vcl+backend {
 # "BadBot" should NOT be blocked with this config (only "EvilCrawler" configured)
 client c1 {
     txreq -url "/" -hdr "User-Agent: BadBot/1.0"
+    rxresp
+    expect resp.status == 200
+} -run
+
+client c4 {
+    txreq -url "/defaults" -hdr "User-Agent: BadBot/1.0"
+    rxresp
+    expect resp.status == 403
+} -run
+
+client c5 {
+    txreq -url "/zero-window" -hdr "User-Agent: BadBot/1.0"
     rxresp
     expect resp.status == 200
 } -run

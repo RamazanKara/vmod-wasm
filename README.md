@@ -2,19 +2,11 @@
 
 A Varnish VMOD that executes WebAssembly modules for HTTP request processing at the edge.
 
-[![License: BSD-2-Clause](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
-[![CI](https://github.com/RamazanKara/vmod-wasm/actions/workflows/ci.yml/badge.svg)](https://github.com/RamazanKara/vmod-wasm/actions)
-![Wasmtime](https://img.shields.io/badge/Wasmtime-v49.0.2-blue)
-![Varnish](https://img.shields.io/badge/Varnish-9.0%2B-purple)
-![Proxy-Wasm ABI](https://img.shields.io/badge/Proxy--Wasm%20ABI-v0.2.1-green)
-
-
 ## Overview
 
 vmod-wasm embeds the [Wasmtime](https://wasmtime.dev/) runtime into Varnish
-Cache 9.x. It lets you write edge logic in **Rust**, **Go**, or
-**AssemblyScript**, compile it to WebAssembly, and run it from VCL during
-request and response processing.
+Cache 9.x. The in-tree examples use Rust compiled to WebAssembly and run from
+VCL during request and response processing.
 
 It includes an HTTP-focused
 [Proxy-Wasm ABI v0.2.1](https://github.com/proxy-wasm/spec) implementation for
@@ -52,9 +44,9 @@ and prints guest metrics, host execution stats, and HTTP pool stats.
 - Deferred `proxy_on_http_call_response` callback, invoked after
   `on_http_request_headers` returns to avoid proxy-wasm SDK re-entrancy
 - WASI support (`fd_write`, `clock_time_get`, `random_get` with real implementations)
-- Epoch-based execution time limits (low-overhead, no per-instruction cost)
+- Epoch-based execution time limits
 - Memory limits (default 16 MiB)
-- Store pooling for fast per-request instantiation
+- Optional store pooling for stateless Proxy-Wasm modules
 - HTTP connection pooling with circuit breaker for outbound calls
 - Streaming response body inspection via VDP
 - SSRF prevention (upstream allowlist + IP rebinding protection)
@@ -62,17 +54,20 @@ and prints guest metrics, host execution stats, and HTTP pool stats.
 
 ## Quick Start
 
+These VCL fragments assume an existing backend and installed VMOD. Build the
+example modules first and copy the named artifact to the path used by VCL.
+
 ```vcl
 import wasm;
 
 sub vcl_init {
-    wasm.load("my_filter", "/etc/varnish/wasm/filter.wasm");
+    wasm.load("my_filter", "/etc/varnish/wasm/test_module.wasm");
     wasm.set_epoch_deadline(100);    # explicit production execution limit
     wasm.set_memory_limit(8388608);  # 8 MiB
 }
 
 sub vcl_recv {
-    if (wasm.execute("my_filter", "on_request") == 403) {
+    if (wasm.execute("my_filter", "block_bad_bot") != 0) {
         return (synth(403, "Blocked"));
     }
 }
@@ -81,6 +76,14 @@ sub vcl_recv {
 ### Proxy-Wasm
 
 ```vcl
+import wasm;
+
+sub vcl_init {
+    wasm.load("waf", "/etc/varnish/wasm/proxy_wasm_filter.wasm");
+    wasm.set_epoch_deadline(100);
+    wasm.set_memory_limit(8388608);
+}
+
 sub vcl_recv {
     set req.http.X-Wasm-Result = wasm.proxy_wasm_on_request("waf");
     if (req.http.X-Wasm-Result != "0") {
@@ -138,7 +141,9 @@ For host function signatures and Proxy-Wasm ABI coverage, see
 
 - Varnish Cache 9.x (with varnishapi dev headers)
 - Wasmtime C API 49.0.2 (libwasmtime)
-- autotools, pkg-config, C compiler
+- autotools (autoconf, automake, libtool), make, pkg-config, C compiler, Python 3
+- Rust with the `wasm32-unknown-unknown` target, clippy and rustfmt for tests/lints
+- curl and tar for the pinned companion-filter test fixtures
 
 ### Build
 
@@ -146,9 +151,14 @@ For host function signatures and Proxy-Wasm ABI coverage, see
 ./autogen.sh
 ./configure --with-wasmtime=/opt/wasmtime
 make
-make check
+make lint check build
 make install
 ```
+
+Run the make targets locally before accepting a change. `make check` runs the
+standalone C shared-store tests, Rust configuration tests, and VTC integration
+tests. It requires `varnishtest` and downloads pinned companion-filter sources;
+Cargo also needs access to any dependencies not already cached.
 
 ### Release Bundles
 
@@ -156,19 +166,19 @@ GitHub releases use Varnish-specific tags such as `varnish9-v4.3.5` so the
 supported Varnish ABI line is visible before download. The package version
 remains semantic (`4.3.5`), while the release channel identifies Varnish 9.
 
-Release assets include source and convenience binary bundles for Linux `amd64`
+The release workflow packages source and convenience binary bundles for Linux `amd64`
 and `arm64` on Varnish 9. Binary bundles include `libvmod_wasm.so`,
 `libwasmtime.so`, notices, checksums, and an install note. Source builds remain
 the authoritative path for custom Varnish installations.
 
-The current stable release line is `4.3.x` for Varnish 9.x. Binary assets are
-published for Linux `amd64` and `arm64`.
+The package version in this checkout is `4.3.5`, targeting Varnish 9.x. Check a
+release's actual assets before relying on a binary bundle being available.
 
 ### Docker
 
 ```bash
 docker build -t vmod-wasm-ci .
-docker run --rm vmod-wasm-ci make check
+docker run --rm vmod-wasm-ci make lint check build
 docker run --rm vmod-wasm-ci make distcheck DISTCHECK_CONFIGURE_FLAGS="--with-wasmtime=/opt/wasmtime"
 ```
 

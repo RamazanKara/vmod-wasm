@@ -58,21 +58,21 @@ registered for SDK link compatibility only.
 ### Shared Data
 | Function | Status | Notes |
 |----------|--------|-------|
-| `proxy_get_shared_data` | ✅ Implemented | Thread-safe FNV-1a hash table |
+| `proxy_get_shared_data` | ✅ Implemented | Process-wide FNV-1a hash table; keys up to 256 bytes |
 | `proxy_set_shared_data` | ✅ Implemented | With CAS support |
 
 ### Shared Queue
 | Function | Status | Notes |
 |----------|--------|-------|
-| `proxy_register_shared_queue` | ✅ Implemented | Thread-safe FIFO queues |
+| `proxy_register_shared_queue` | ✅ Implemented | Thread-safe FIFO queues; names up to 256 bytes |
 | `proxy_enqueue_shared_queue` | ✅ Implemented | |
 | `proxy_dequeue_shared_queue` | ✅ Implemented | |
-| `proxy_resolve_shared_queue` | ✅ Implemented | |
+| `proxy_resolve_shared_queue` | Partial | Resolves by name; ignores VM ID |
 
 ### Metrics
 | Function | Status | Notes |
 |----------|--------|-------|
-| `proxy_define_metric` | ✅ Implemented | Counter, gauge, histogram |
+| `proxy_define_metric` | Partial | Counter/gauge values; histogram stores one value, not buckets |
 | `proxy_record_metric` | ✅ Implemented | Thread-safe |
 | `proxy_increment_metric` | ✅ Implemented | |
 | `proxy_get_metric` | ✅ Implemented | |
@@ -86,7 +86,7 @@ registered for SDK link compatibility only.
 ### Lifecycle
 | Function | Status | Notes |
 |----------|--------|-------|
-| `proxy_send_local_response` | ✅ Implemented | Captures body + headers |
+| `proxy_send_local_response` | Partial | Captures body/headers, but VCL receives the status and must construct the response |
 | `proxy_set_effective_context` | ✅ Implemented | Validates root/stream context IDs |
 | `proxy_done` | ✅ Implemented | Records module completion signal |
 | `proxy_continue_stream` | ✅ Implemented | Resumes paused request/response processing |
@@ -185,3 +185,13 @@ Response maps include:
 
 7. **Single filter per execution**: Unlike Envoy's filter chain, each
    `proxy_wasm_on_request()` call runs one module. Chain in VCL if needed.
+
+8. **Shared-state lifetime**: Shared data, queues, and metrics are process-wide,
+   not isolated by module or VCL. Shared keys have no TTL, eviction, or deletion;
+   storing an empty value does not remove a key.
+
+9. **Queue notifications**: Queue operations are available, but
+   `proxy_on_queue_ready` is not delivered.
+
+10. **Callout transport**: HTTP callouts use plain TCP/HTTP, without TLS or
+    chunked-response decoding. Setting port 443 does not enable HTTPS.

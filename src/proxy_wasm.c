@@ -765,7 +765,7 @@ pw_proxy_get_shared_data(void *env, wasmtime_caller_t *caller,
     wasmtime_val_t *results, size_t nresults)
 {
 	struct vwasm_proxy_ctx *ctx;
-	char key_buf[VWASM_SHARED_DATA_MAX_KEY];
+	char key_buf[VWASM_SHARED_DATA_MAX_KEY + 1];
 	uint8_t *value = NULL;
 	size_t value_len = 0;
 	uint32_t cas = 0;
@@ -819,7 +819,7 @@ pw_proxy_set_shared_data(void *env, wasmtime_caller_t *caller,
     wasmtime_val_t *results, size_t nresults)
 {
 	struct vwasm_proxy_ctx *ctx;
-	char key_buf[VWASM_SHARED_DATA_MAX_KEY];
+	char key_buf[VWASM_SHARED_DATA_MAX_KEY + 1];
 	uint8_t *value_data;
 	uint32_t key_size, val_ptr, val_size, cas;
 	int ret;
@@ -880,7 +880,7 @@ pw_proxy_register_shared_queue(void *env, wasmtime_caller_t *caller,
     wasmtime_val_t *results, size_t nresults)
 {
 	struct vwasm_proxy_ctx *ctx;
-	char name_buf[VWASM_QUEUE_MAX_NAME];
+	char name_buf[VWASM_QUEUE_MAX_NAME + 1];
 	uint32_t queue_id;
 
 	(void)env;
@@ -921,7 +921,7 @@ pw_proxy_resolve_shared_queue(void *env, wasmtime_caller_t *caller,
     wasmtime_val_t *results, size_t nresults)
 {
 	struct vwasm_proxy_ctx *ctx;
-	char vm_buf[256], name_buf[VWASM_QUEUE_MAX_NAME];
+	char vm_buf[256], name_buf[VWASM_QUEUE_MAX_NAME + 1];
 	uint32_t queue_id;
 
 	(void)env;

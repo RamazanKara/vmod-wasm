@@ -117,7 +117,7 @@ $Restrict vcl_init
 
 $Function STRING get_stats_json()
 
-Return execution statistics as JSON. Counters are atomic and thread-safe. Example::
+Return execution statistics as JSON. Example::
 
     set resp.http.X-Wasm-Stats = wasm.get_stats_json();
 
@@ -132,8 +132,8 @@ $Function VOID set_store_pool_size(STRING module, INT size)
 $Restrict vcl_init
 
 Set number of pre-warmed stores for a module. Larger pools reduce instantiation
-latency under concurrency. Default 8; valid range 1-256. Must be called after
-load(). Example::
+latency under concurrency. Pools are opt-in; valid range 1-256. Must be called
+after load() and resource-limit setters. Example::
 
     wasm.set_store_pool_size("auth", 32);
 
@@ -141,8 +141,8 @@ $Function VOID set_http_pool_size(INT size)
 
 $Restrict vcl_init
 
-Set maximum number of persistent HTTP connections in the pool. Default 16;
-valid range 1-1024. Example::
+Enable HTTP connection pooling with the given capacity (1-1024). Without this
+call, callouts use direct connections. Example::
 
     wasm.set_http_pool_size(64);
 

@@ -70,6 +70,9 @@ Call an exported function from a raw (non-proxy-wasm) module.
 
 **Returns**: INT (the function's i32 return value, or `-1` on error)
 
+Execution errors return `0` when fail mode is `open`. The same fail-mode rule
+applies to the Proxy-Wasm lifecycle functions below.
+
 **Scope**: client side
 
 ### `wasm.proxy_wasm_on_request(module)`
@@ -175,9 +178,15 @@ linear memory.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `module` | STRING | Module name (from `wasm.load`) |
-| `size` | INT | Number of stores to pre-warm (1-256; default 8 if not set) |
+| `size` | INT | Number of stores to pre-warm (1-256) |
 
-Call this from `vcl_init` after `wasm.load()`.
+Call this from `vcl_init` after `wasm.load()` and resource-limit setters. No
+store pool is created unless this function is called. It applies to Proxy-Wasm
+execution; raw `wasm.execute()` creates a fresh store.
+
+Only the initial linear-memory snapshot is restored on pool checkout. Mutable
+globals, tables, and memory grown beyond that snapshot are not reset. Use
+pooling only for modules whose state is compatible with that restriction.
 
 ### `wasm.set_http_pool_size(size)`
 
@@ -185,16 +194,17 @@ Set the maximum number of persistent HTTP callout connections.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `size` | INT | Maximum pooled HTTP connections (1-1024; default 16 if not set) |
+| `size` | INT | Maximum pooled HTTP connections (1-1024) |
 
 Call this from `vcl_init`. The pool is shared by Proxy-Wasm HTTP callouts in
-the current loaded VCL.
+the current loaded VCL. Without this call, callouts use direct connections.
 
 ### `wasm.filter_chain(chain_spec)`
 
 Run a request-side chain of modules separated by `|`.
 
-**Returns**: INT (`0` = success, `-1` = error)
+**Returns**: INT (`0` = continue, nonzero = stopped/error; execution errors
+return `0` in fail-open mode)
 
 **Scope**: client side
 
@@ -209,7 +219,7 @@ if (wasm.filter_chain("rate_limit|auth|transform") != 0) {
 
 Run a response-side chain of modules separated by `|`.
 
-**Returns**: INT (`0` = success, `-1` = error)
+**Returns**: INT (same semantics as `wasm.filter_chain()`)
 
 **Scope**: `vcl_backend_response`, `vcl_deliver`
 
@@ -281,7 +291,9 @@ as values)
 
 Return internal execution statistics as JSON.
 
-**Returns**: STRING (JSON with pool stats, execution counts, error counts)
+**Returns**: STRING (JSON with `calls_total`, `calls_ok`, `calls_error`,
+`calls_timeout`, `local_responses`, `http_calls`, `http_calls_blocked`, and
+`body_bytes_in`; pool statistics have separate getters)
 
 ### `wasm.get_pool_stats_json(module)`
 
@@ -301,6 +313,11 @@ Return HTTP connection pool statistics.
 
 ```vcl
 import wasm;
+
+acl wasm_metrics_clients {
+    "127.0.0.1";
+    "::1";
+}
 
 sub vcl_init {
     # Load the module
@@ -324,6 +341,9 @@ sub vcl_recv {
 
     # Metrics endpoint
     if (req.url == "/__wasm_metrics") {
+        if (client.ip !~ wasm_metrics_clients) {
+            return (synth(403, "Forbidden"));
+        }
         return (synth(200, "Metrics"));
     }
 
@@ -336,7 +356,7 @@ sub vcl_recv {
 }
 
 sub vcl_synth {
-    if (req.url == "/__wasm_metrics") {
+    if (req.url == "/__wasm_metrics" && resp.status == 200) {
         set resp.http.Content-Type = "application/json";
         synthetic(wasm.get_metrics_json());
         return (deliver);

@@ -97,9 +97,15 @@ EXTRA_DIST = \
 	tests/vcl_reload_lifecycle.vtc \
 	tests/wasm/test_module.wasm
 
-# Unit tests cannot link standalone against the VMOD because Varnish internal
-# symbols (http_SetH, VRT_priv_task_get, etc.) are only available inside
-# varnishd at runtime. Integration testing is done via VTC tests below.
+check_PROGRAMS = tests/test_proxy_wasm_shared
+TESTS = $(check_PROGRAMS)
+tests_test_proxy_wasm_shared_SOURCES = \
+	tests/test_proxy_wasm_shared.c \
+	src/proxy_wasm_shared.c \
+	src/proxy_wasm_shared.h
+tests_test_proxy_wasm_shared_CPPFLAGS = -I$(srcdir)/src
+tests_test_proxy_wasm_shared_CFLAGS = $(AM_CFLAGS) -pthread
+tests_test_proxy_wasm_shared_LDADD = -lpthread
 
 .PHONY: build build-wasm-test-fixtures lint fmt audit test docker-test perf-test soak-test release-dry-run
 
@@ -113,7 +119,7 @@ build-wasm-test-fixtures:
 	@mkdir -p "$(WASM_FIXTURE_DIR)"
 	@cd "$(abs_top_srcdir)/examples" && \
 		CARGO_TARGET_DIR="$(WASM_TARGET_DIR)" \
-		"$(CARGO)" build --release --target wasm32-unknown-unknown
+		"$(CARGO)" build --locked --release --target wasm32-unknown-unknown
 	@cp "$(WASM_RELEASE_DIR)/test_module.wasm" "$(WASM_FIXTURE_DIR)/"
 	@cp "$(WASM_RELEASE_DIR)/proxy_wasm_filter.wasm" "$(WASM_FIXTURE_DIR)/"
 	@cp "$(WASM_RELEASE_DIR)/passthrough.wasm" "$(WASM_FIXTURE_DIR)/"
@@ -124,7 +130,7 @@ build-wasm-test-fixtures:
 
 lint:
 	cd "$(abs_top_srcdir)/examples" && "$(CARGO)" fmt --all --check
-	cd "$(abs_top_srcdir)/examples" && "$(CARGO)" clippy --target wasm32-unknown-unknown --all-targets -- -D warnings
+	cd "$(abs_top_srcdir)/examples" && "$(CARGO)" clippy --locked --target wasm32-unknown-unknown --all-targets -- -D warnings
 
 fmt:
 	cd "$(abs_top_srcdir)/examples" && "$(CARGO)" fmt --all
@@ -154,6 +160,8 @@ release-dry-run:
 
 # Run VTC tests (integration tests inside varnishd)
 check-local: build-wasm-test-fixtures
+	cd "$(abs_top_srcdir)/examples" && CARGO_TARGET_DIR="$(WASM_TARGET_DIR)" \
+		"$(CARGO)" test --locked -p edge-security-filter --lib
 	@if test -n "$(VARNISHTEST)"; then \
 		for t in $(abs_top_srcdir)/tests/*.vtc; do \
 			echo "Running $$t..."; \
@@ -170,8 +178,18 @@ check-local: build-wasm-test-fixtures
 				$$t || exit 1; \
 		done; \
 	else \
-		echo "WARNING: varnishtest not found, skipping VTC tests"; \
+		echo "ERROR: varnishtest not found; install Varnish or use Docker"; \
+		exit 1; \
 	fi
 
 clean-local:
-	rm -rf "$(WASM_TARGET_DIR)" "$(WASM_FIXTURE_DIR)"
+	rm -rf "$(WASM_TARGET_DIR)"
+	if test "$(abs_top_builddir)" != "$(abs_top_srcdir)"; then \
+		rm -rf "$(WASM_FIXTURE_DIR)"; \
+	else \
+		rm -f "$(WASM_FIXTURE_DIR)/proxy_wasm_filter.wasm" \
+			"$(WASM_FIXTURE_DIR)/passthrough.wasm" \
+			"$(WASM_FIXTURE_DIR)/transform.wasm" \
+			"$(WASM_FIXTURE_DIR)/edge_security_filter.wasm"; \
+		rm -rf "$(WASM_FIXTURE_DIR)/companions"; \
+	fi

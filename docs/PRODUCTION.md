@@ -8,7 +8,7 @@ for operators deciding how to install, constrain, monitor, reload, and roll back
 Wasm filters in production.
 
 The stable release support target is Varnish 9.x on Linux `amd64` and `arm64`.
-GitHub binary bundles include the Wasmtime 49.0.2 runtime library used at build
+The release workflow bundles the Wasmtime 49.0.2 runtime library used at build
 time. Keep `libvmod_wasm.so` and the bundled `libwasmtime.so` together, or set
 `LD_LIBRARY_PATH` so `varnishd` can resolve `libwasmtime.so` at startup.
 
@@ -46,6 +46,11 @@ path:
 import wasm;
 import std;
 
+acl wasm_metrics_clients {
+    "127.0.0.1";
+    "::1";
+}
+
 sub vcl_init {
     wasm.load("edge", "/etc/varnish/wasm/edge_security_filter.wasm");
     wasm.set_epoch_deadline(100);
@@ -56,13 +61,27 @@ sub vcl_init {
 }
 
 sub vcl_recv {
-    if (req.url == "/__wasm_metrics" && req.http.X-Internal == "true") {
+    if (req.url == "/__wasm_metrics") {
+        if (client.ip !~ wasm_metrics_clients) {
+            return (synth(403, "Forbidden"));
+        }
         return (synth(200, "Metrics"));
     }
 
     set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request("edge");
+    if (req.http.X-Wasm-Action == "-1") {
+        return (synth(503, "Wasm execution failed"));
+    }
     if (req.http.X-Wasm-Action != "0") {
         return (synth(std.integer(req.http.X-Wasm-Action, 403), "Blocked"));
+    }
+}
+
+sub vcl_synth {
+    if (req.url == "/__wasm_metrics" && resp.status == 200) {
+        set resp.http.Content-Type = "application/json";
+        synthetic(wasm.get_metrics_json());
+        return (deliver);
     }
 }
 ```
@@ -79,8 +98,8 @@ sub vcl_init {
 
 - Controls maximum wall-clock time per Wasm execution
 - Prevents infinite loops and runaway computations
-- Based on epoch-based interruption (low overhead, no per-instruction cost)
-- Exceeding the deadline causes a trap; execution returns -1 (error)
+- Based on epoch checks performed by Wasmtime
+- Exceeding the deadline causes a trap; execution returns -1 in fail-closed mode
 - Built-in default is 5000ms; production VCL should set a smaller explicit value
 - Set based on expected module latency: fast filters 50ms, complex logic 200-500ms
 
@@ -93,8 +112,8 @@ sub vcl_init {
 ```
 
 - Maximum linear memory a Wasm module can allocate
-- Prevents memory exhaustion attacks
-- Minimum recommended: 1 MiB; Maximum recommended: 64 MiB
+- Does not cap shared data, compiled code, or other host allocations
+- Set limits before creating an optional store pool
 
 ## Security Configuration
 
@@ -102,7 +121,7 @@ sub vcl_init {
 
 ```vcl
 sub vcl_init {
-    wasm.set_allowed_upstreams("api.internal:8080,auth.svc:443");
+    wasm.set_allowed_upstreams("api.internal:8080,auth.svc:8080");
 }
 ```
 
@@ -111,6 +130,7 @@ sub vcl_init {
 - If not set, all non-private destinations that pass SSRF checks are allowed
   (too broad for production)
 - Format: comma-separated `host:port` entries
+- Callouts use plain HTTP; the port number does not enable TLS
 
 ### HTTP Call Rate Limit
 
@@ -142,15 +162,26 @@ sub vcl_init {
 
 ### Metrics Endpoint
 
+Use an ACL appropriate for the network that directly connects to Varnish. A
+client-supplied header is not an access-control boundary.
+
 ```vcl
+acl wasm_metrics_clients {
+    "127.0.0.1";
+    "::1";
+}
+
 sub vcl_recv {
     if (req.url == "/__wasm_metrics") {
+        if (client.ip !~ wasm_metrics_clients) {
+            return (synth(403, "Forbidden"));
+        }
         return (synth(200, "Metrics"));
     }
 }
 
 sub vcl_synth {
-    if (req.url == "/__wasm_metrics") {
+    if (req.url == "/__wasm_metrics" && resp.status == 200) {
         set resp.http.Content-Type = "application/json";
         synthetic(wasm.get_metrics_json());
         return (deliver);
@@ -193,11 +224,10 @@ varnishlog -g request -q 'Debug ~ "wasm"'
 
 ## Performance Considerations
 
-- Wasm modules are compiled once at `vcl_init` — instantiation is cheap
+- Wasm modules are compiled once at `vcl_init`; measure instantiation costs for your modules
 - Each loaded VCL owns its own Wasmtime engine and compiled module set
-- Each request gets an isolated Wasm instance/store (no linear-memory leakage between requests)
-- Epoch-based time limits have near-zero overhead (no per-instruction cost)
-- Memory limit enforcement is near-zero cost (page fault based)
+- Executions use fresh stores unless a compatible Proxy-Wasm store pool is explicitly configured
+- Pool resets restore only the initial linear-memory snapshot, not grown memory, globals, or tables
 - HTTP callouts are synchronous — keep timeouts short
 
 For a quick local throughput sweep before larger canary tests, run:
@@ -222,9 +252,8 @@ sub vcl_deliver {
 }
 ```
 
-- The `wasm_body` VDP streams response body chunks directly to
-  `proxy_on_response_body` as they arrive — no buffering
-- Each chunk is forwarded to the client immediately after inspection
+- The `wasm_body` VDP passes each response body chunk to
+  `proxy_on_response_body` and forwards the inspected or rewritten chunk
 - `end_of_stream=1` is set on the final chunk
 - Memory usage is O(chunk_size), not O(body_size)
 
@@ -251,8 +280,8 @@ varnishadm vcl.discard boot
 The old VCL and its Wasm engine remain active until all in-flight requests
 complete and Varnish discards the VCL. On discard, vmod-wasm unregisters the
 VDP filter, stops tick timers, destroys store and HTTP pools, and only then
-deletes Wasmtime modules and the engine. No requests are dropped during the
-transition.
+deletes Wasmtime modules and the engine. Validate reload behavior under your
+workload before rollout.
 
 ### Canary And Soak Testing
 
@@ -308,26 +337,8 @@ varnishadm vcl.use safe
 
 ### Prometheus Exposition
 
-Expose Wasm metrics for Prometheus scraping:
-
-```vcl
-sub vcl_recv {
-    if (req.url == "/__wasm_metrics" && req.http.X-Internal == "true") {
-        return (synth(200, "Metrics"));
-    }
-}
-
-sub vcl_synth {
-    if (req.url == "/__wasm_metrics") {
-        set resp.http.Content-Type = "application/json";
-        synthetic(wasm.get_metrics_json());
-        return (deliver);
-    }
-}
-```
-
-Convert JSON metrics to Prometheus format using a sidecar exporter or
-configure your metrics pipeline to ingest JSON directly.
+The protected metrics endpoint above returns JSON, not Prometheus exposition
+format. A separate exporter or conversion step is needed for Prometheus.
 
 ### Key Metrics to Alert On
 
@@ -360,30 +371,23 @@ Per loaded VCL, vmod-wasm allocates:
 | Component | Memory | Notes |
 |-----------|--------|-------|
 | Wasm linear memory | Up to `memory_limit` per active or pooled instance | Default 16 MiB |
-| Store pool instances | `store_pool_size * memory_limit` worst case per poolable module | Default 8 stores; modules exporting `_initialize` bypass pooling |
-| Compiled module | ~1-5 MiB per module | Shared within one VCL engine |
-| HTTP connection pool | up to `http_pool_size` sockets + buffers | Default 16 connections |
+| Store pool instances | `store_pool_size * memory_limit` per poolable module | Opt-in; modules exporting `_initialize` bypass pooling |
+| Compiled module | Depends on module | Shared within one VCL engine |
+| HTTP connection pool | up to `http_pool_size` sockets + buffers | Opt-in |
+| Shared data | Depends on stored keys and values | Process-wide; no TTL or eviction |
 
-**Formula**:
-`total_wasm_memory ~= loaded_vcls * modules * store_pool_size * memory_limit + compiled_module_size`
+Budget for active fresh stores as well as pooled stores, compiled modules,
+Wasmtime overhead, host buffers, and shared data. The linear-memory limit does
+not bound total process memory.
 
 During VCL reloads, old and new VCLs may overlap until in-flight traffic drains,
 so budget for at least two loaded VCL generations during deployment.
 
 ### CPU Budget
 
-- Module compilation: one-time cost at VCL load (~100-500ms depending on module size)
-- Per-request execution: typically 0.1-5ms for security filters
-- Epoch ticker thread: negligible (1 thread, increments a counter)
-
-### Sizing Recommendations
-
-| Workload | Epoch Deadline | Memory Limit | HTTP Call Limit |
-|----------|---------------|-------------|-----------------|
-| Simple header filter | 50ms | 4 MiB | 0 |
-| Security filter (bot + rate limit) | 100ms | 8 MiB | 0 |
-| Auth validation (with callout) | 200ms | 8 MiB | 3 |
-| Complex transform (body inspection) | 500ms | 16 MiB | 5 |
+Measure compilation and request latency for the deployed modules. Each loaded
+VCL has an epoch ticker thread; HTTP callouts also occupy Varnish worker threads
+while waiting for upstream responses.
 
 ## Upgrading Modules
 
@@ -398,14 +402,11 @@ so budget for at least two loaded VCL generations during deployment.
 
 ### Store Pool Memory Snapshots
 
-Each request acquires a pre-warmed Wasm instance from the store pool. To ensure
-isolation, the module's linear memory is restored from a snapshot (`memcpy`) on
-every acquisition. For typical modules (1-2 Wasm pages = 64-128 KB) this adds
-negligible overhead.
+When pooling is enabled, checkout copies the initial linear-memory snapshot.
+The copy cost depends on the snapshot size. The reset does not cover grown
+memory, mutable globals, or tables, so enable pooling only for compatible
+modules. Modules exporting `_initialize` bypass pooling.
 
-For modules declaring large initial memory (10+ pages / 640 KB+), the per-request
-`memcpy` can become a throughput bottleneck at very high request rates (10K+/s).
-Mitigation strategies:
-- Keep module memory declarations minimal
-- Use `memory.grow` only when needed (lazy allocation inside the module)
-- Monitor `store_pool_acquire_ns` in stats for latency impact
+`wasm.get_pool_stats_json(module)` reports `capacity`, `acquires`, `releases`,
+`fallbacks`, and `resets`; it does not report acquisition latency. Use
+`make perf-test` to measure the effect of pooling for a representative workload.

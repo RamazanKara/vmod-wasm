@@ -46,6 +46,9 @@ sub vcl_init {
 
 sub vcl_recv {
     set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request("sdk");
+    if (req.http.X-Wasm-Action == "-1") {
+        return (synth(503, "Wasm execution failed"));
+    }
     if (req.http.X-Wasm-Action != "0") {
         return (synth(std.integer(req.http.X-Wasm-Action, 403), "Blocked"));
     }

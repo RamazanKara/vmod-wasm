@@ -5,7 +5,7 @@ This directory is the vmod-wasm integration-test reference for the standalone
 
 Use the standalone repository and its release assets for production deployment.
 This in-tree copy stays close to the VMOD test suite so vmod-wasm can exercise
-Proxy-Wasm headers, body callbacks, shared data, metrics, HTTP callouts, ticks,
+Proxy-Wasm headers, body callbacks, shared data, metrics, HTTP callouts,
 and local responses without depending on a network checkout.
 
 ## Why It Exists
@@ -28,7 +28,6 @@ edge security policy.
 - Optional external auth callouts.
 - Custom Proxy-Wasm counters.
 - Request and response body callback logging.
-- Tick-based aggregate request logging.
 
 ## Proxy-Wasm Coverage
 
@@ -36,7 +35,6 @@ edge security policy.
 |-------------|--------------------------------|
 | `on_vm_start` | Defines metrics |
 | `on_configure` | Parses JSON plugin configuration |
-| `on_tick` | Logs aggregate request counts |
 | `on_http_request_headers` | Runs bot, geo, rate-limit, enrichment, and auth logic |
 | `on_http_request_body` | Logs cached request body size |
 | `on_http_response_headers` | Adds security headers |
@@ -69,14 +67,16 @@ Pass JSON plugin configuration through
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
 | `rate_limit.requests_per_second` | `u32` | `100` | Max requests per client IP per window |
-| `rate_limit.window_seconds` | `u32` | `60` | Rate-limit window size |
+| `rate_limit.window_seconds` | `u32` | `60` | Rate-limit window size; zero falls back to 60 |
 | `bot_patterns` | `string[]` | `["BadBot", "Scraper"]` | Case-insensitive substrings that trigger 403 |
 | `blocked_countries` | `string[]` | `[]` | Country codes matched against `X-Country-Code` |
 | `enrich_headers` | `bool` | `true` | Adds request and response marker/security headers |
 | `auth_service` | `string` | `""` | Auth upstream authority, such as `auth.internal:8080`; empty disables callouts |
 
-Invalid JSON falls back to the default fixture config. The standalone product is
-stricter and fails closed on invalid configuration.
+Invalid JSON falls back to the default fixture config. Omitting `bot_patterns`
+uses the default patterns; an explicit empty array disables bot detection.
+Rate-limit keys are not expired by the host, and shared-data errors fail open
+in this fixture. It is not a bounded production rate limiter.
 
 ## Build
 
@@ -114,6 +114,9 @@ sub vcl_recv {
         {"{"bot_patterns":["BadBot"],"rate_limit":{"requests_per_second":50}}"}
     );
 
+    if (req.http.X-Wasm-Action == "-1") {
+        return (synth(503, "Wasm execution failed"));
+    }
     if (req.http.X-Wasm-Action != "0") {
         return (synth(std.integer(req.http.X-Wasm-Action, 403), "Blocked"));
     }

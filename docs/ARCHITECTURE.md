@@ -72,11 +72,11 @@ Varnish Cache as a VMOD (Varnish Module). It supports two execution models:
 ```
 vcl_recv
   └─▶ wasm.execute("module", "func")
-       └─▶ store_pool: checkout instance
+       └─▶ wasmtime: create fresh store and instance
             └─▶ wasmtime: call exported function
                  ├─▶ host_functions.c (if module imports env)
                  └─▶ return i32 result to VCL
-            └─▶ store_pool: return instance
+            └─▶ wasmtime: delete store
 ```
 
 ### Proxy-Wasm Request Lifecycle
@@ -96,7 +96,7 @@ vcl_recv
             │    └─▶ invoked AFTER on_http_request_headers returns
             │         (deferred to avoid proxy-wasm SDK RefCell re-entrancy)
             ├─▶ proxy_on_request_body(ctx_id, body_size, end_of_stream)
-            └─▶ proxy_on_context_finalize(ctx_id)
+            └─▶ proxy_on_log / proxy_on_done / proxy_on_delete
        └─▶ store_pool: return instance
        └─▶ return action code to VCL ("0" = continue)
 
@@ -128,20 +128,22 @@ mutating the module set used by older traffic.
 
 ### Store Pooling
 
-Instead of creating a new Wasmtime instance per request, vmod-wasm pre-creates
-a pool of instances at VCL init time. This eliminates compilation latency from
-the request path.
+`wasm.set_store_pool_size()` creates a pool of Proxy-Wasm instances at VCL init
+time. Without it, executions create fresh stores. Compilation happens at
+`wasm.load()` regardless of pooling.
 
-- Default pool size: 8 stores per module
+- Pools are opt-in
 - Configurable with `wasm.set_store_pool_size(module, size)` after `wasm.load()`
 - Valid range: 1-256 stores per module
-- Checkout: O(1) via atomic counter
-- Return: instance memory is restored from the warm snapshot before reuse
+- Checkout: scans up to the pool capacity using atomic slot claims
+- The initial linear-memory snapshot is restored on checkout; grown memory,
+  mutable globals, and tables are not reset
 - Modules exporting `_initialize` bypass store pooling because mutable Wasm
   globals and VM state cannot be reset from a linear-memory snapshot alone
 
 If no warm store is available, the request falls back to a fresh Wasmtime store
-and instance. The pool is an optimization, not a correctness dependency.
+and instance. Pool only modules compatible with the limited reset described
+above. Raw `wasm.execute()` always uses a fresh store.
 
 ### Epoch-Based Time Limits
 
@@ -150,7 +152,7 @@ interruption uses a background thread that increments a global epoch counter.
 When a Wasm execution exceeds its deadline, the next epoch check traps the
 execution.
 
-- Zero overhead during normal execution
+- Wasmtime checks the epoch during execution
 - Background ticker thread (1ms resolution)
 - Configurable per VCL load via `wasm.set_epoch_deadline(ms)`
 - Default deadline: 5000ms; production filters should set an explicit lower value
@@ -160,7 +162,7 @@ execution.
 Proxy-Wasm HTTP callouts (`proxy_http_call`) reuse connections via an internal pool:
 
 - Blocking TCP sockets from the Varnish worker thread executing the filter
-- Default pool size: 16 persistent connections; configurable with `wasm.set_http_pool_size(size)`
+- Opt-in via `wasm.set_http_pool_size(size)`; otherwise each call uses a direct connection
 - Circuit breaker: after N consecutive failures, short-circuit for cooldown period
 - SSRF prevention: upstream allowlist plus private/internal IP checks for
   non-allowlisted destinations after DNS resolution
@@ -202,8 +204,8 @@ Response body streaming uses Varnish Delivery Processors (VDP):
 - **Engine**: one Wasmtime engine per loaded VCL, immutable after `vcl_init`
 - **Modules**: compiled once during VCL load/init and never mutated on the request path
 - **Store pool**: per-module lock-free checkout via atomic operations
-- **Shared data**: reader-writer lock (RWLock) per hash bucket
-- **Metrics**: atomic u64 counters; RWLock for metric definition
+- **Shared data**: one reader-writer lock (RWLock) for the process-wide store
+- **Metrics**: reader-writer lock around metric operations
 - **HTTP pool**: shared pool protected by internal locks; pooled connections are reused only after clean idle return
 - **Teardown**: tick timers and pools are stopped before Wasmtime modules, linker, and engine are deleted
 
@@ -216,11 +218,11 @@ Response body streaming uses Varnish Delivery Processors (VDP):
 | `wasm_engine.c/h` | Wasmtime engine, module compilation, config |
 | `store_pool.c/h` | Instance pool management |
 | `host_functions.c/h` | Raw host functions (env + WASI namespaces) |
-| `proxy_wasm.c/h` | Proxy-Wasm ABI lifecycle orchestration |
+| `proxy_wasm.c/h` | Proxy-Wasm host calls, shared-state access, metrics |
 | `proxy_wasm_headers.c` | Header map operations |
 | `proxy_wasm_http.c` | HTTP callout dispatch and callbacks |
 | `proxy_wasm_properties.c` | Property get/set |
-| `proxy_wasm_shared.c/h` | Shared data, queues, metrics |
+| `proxy_wasm_shared.c/h` | Shared data and queues |
 | `proxy_wasm_mem.h` | Memory allocation helpers |
 | `http_pool.c/h` | HTTP connection pool with circuit breaker |
 | `vdp_wasm.c/h` | VDP filter for response body delivery |

@@ -43,8 +43,9 @@ exercise the VMOD from VTC tests:
 
 For production edge-security deployments, use the standalone
 [vmod-wasm Edge Security Filter](https://github.com/RamazanKara/vmod-wasm-edge-security-filter)
-repository. The in-tree filter remains a fixture so vmod-wasm can test a
-realistic workload without depending on another repository during CI.
+repository. The in-tree filter remains a fixture; the wider VTC suite also
+downloads JWT, signature-verifier, and cache-key companion filters at pinned
+revisions.
 
 ## Release Checks
 
@@ -53,7 +54,7 @@ survive the same checks as the code:
 
 ```bash
 docker build -t vmod-wasm-ci .
-docker run --rm vmod-wasm-ci make check
+docker run --rm vmod-wasm-ci make lint check build
 docker run --rm vmod-wasm-ci make distcheck DISTCHECK_CONFIGURE_FLAGS="--with-wasmtime=/opt/wasmtime"
 ```
 

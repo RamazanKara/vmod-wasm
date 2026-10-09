@@ -35,7 +35,7 @@ pub struct FilterConfig {
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
     /// User-Agent substrings that trigger bot blocking (403).
-    #[serde(default)]
+    #[serde(default = "default_bot_patterns")]
     pub bot_patterns: Vec<String>,
     /// ISO country codes to block (matched against X-Country-Code header).
     #[serde(default)]
@@ -53,7 +53,7 @@ impl Default for FilterConfig {
     fn default() -> Self {
         Self {
             rate_limit: RateLimitConfig::default(),
-            bot_patterns: vec!["BadBot".into(), "Scraper".into()],
+            bot_patterns: default_bot_patterns(),
             blocked_countries: Vec::new(),
             enrich_headers: true,
             auth_service: String::new(),
@@ -65,10 +65,18 @@ fn default_true() -> bool {
     true
 }
 
+fn default_bot_patterns() -> Vec<String> {
+    vec!["BadBot".into(), "Scraper".into()]
+}
+
 /// Parse JSON configuration bytes into FilterConfig.
 /// Returns default config on parse failure (fail-open for config).
 pub fn parse_config(data: &[u8]) -> FilterConfig {
-    serde_json_wasm::from_slice(data).unwrap_or_default()
+    let mut config: FilterConfig = serde_json_wasm::from_slice(data).unwrap_or_default();
+    if config.rate_limit.window_seconds == 0 {
+        config.rate_limit.window_seconds = default_window_seconds();
+    }
+    config
 }
 
 #[cfg(test)]
@@ -103,15 +111,36 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_empty_returns_default() {
-        let config = parse_config(b"{}");
-        assert_eq!(config.rate_limit.requests_per_second, 100);
-        assert!(config.enrich_headers);
+    fn test_parse_bot_defaults() {
+        for json in ["", "{}", "not json", r#"{"enrich_headers":false}"#] {
+            let config = parse_config(json.as_bytes());
+            assert_eq!(config.bot_patterns, vec!["BadBot", "Scraper"], "{json}");
+        }
+
+        let config = parse_config(br#"{"bot_patterns":[]}"#);
+        assert!(config.bot_patterns.is_empty());
     }
 
     #[test]
-    fn test_parse_invalid_returns_default() {
-        let config = parse_config(b"not json");
-        assert_eq!(config.rate_limit.requests_per_second, 100);
+    fn test_parse_rate_limit_windows() {
+        for (window, expected) in [
+            ("0", 60),
+            ("1", 1),
+            ("4294967295", u32::MAX),
+            ("4294967296", 60),
+            ("-1", 60),
+            ("null", 60),
+        ] {
+            let json = format!(r#"{{"rate_limit":{{"window_seconds":{window}}}}}"#);
+            let config = parse_config(json.as_bytes());
+            assert_eq!(config.rate_limit.window_seconds, expected, "{json}");
+        }
+
+        let config = parse_config(
+            br#"{"rate_limit":{"requests_per_second":5,"window_seconds":0},"bot_patterns":[]}"#,
+        );
+        assert_eq!(config.rate_limit.requests_per_second, 5);
+        assert_eq!(config.rate_limit.window_seconds, 60);
+        assert!(config.bot_patterns.is_empty());
     }
 }

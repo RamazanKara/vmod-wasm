@@ -111,9 +111,10 @@ impl HttpContext for MyFilter {
 
 ### 5. Build
 
+From the `examples/` directory used above:
+
 ```bash
-cd examples
-cargo build --release --target wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown -p my-filter
 ```
 
 Output: `examples/target/wasm32-unknown-unknown/release/my_filter.wasm`
@@ -201,7 +202,7 @@ impl Context for MyFilter {
 impl HttpContext for MyFilter {
     fn on_http_request_headers(&mut self, _num_headers: usize, _end_of_stream: bool) -> Action {
         if let Some(token) = self.get_http_request_header("authorization") {
-            self.dispatch_http_call(
+            let result = self.dispatch_http_call(
                 "auth.internal:8080",    // must match set_allowed_upstreams()
                 vec![
                     (":method", "GET"),
@@ -212,8 +213,11 @@ impl HttpContext for MyFilter {
                 None,
                 vec![],
                 Duration::from_secs(5),
-            )
-            .ok();
+            );
+            if result.is_err() {
+                self.send_http_response(503, vec![], Some(b"Auth service unavailable"));
+                return Action::Pause;
+            }
             self.awaiting_auth = true;
             return Action::Pause;        // resume happens in on_http_call_response
         }
@@ -255,8 +259,17 @@ fn on_configure(&mut self, _size: usize) -> bool {
 
 ```bash
 cd examples
-cargo test
+cargo test --locked -p edge-security-filter --lib
 ```
+
+Only `edge-security-filter` currently contains Rust unit tests. The other
+example modules are exercised by VTC.
+
+### Unit Tests (C)
+
+After configuring the native build, `make check` also runs
+`tests/test_proxy_wasm_shared`, which links only the shared-data/queue code and
+pthreads. The VMOD itself still needs Varnish for integration tests.
 
 ### Integration Tests (VTC)
 
@@ -265,7 +278,7 @@ VTC (Varnish Test Case) files test the module running inside actual Varnish:
 ```bash
 # Build everything and run tests in Docker
 docker build -t vmod-wasm-ci .
-docker run --rm vmod-wasm-ci make check
+docker run --rm vmod-wasm-ci make lint check build
 ```
 
 For source distribution checks:
@@ -416,5 +429,5 @@ sub vcl_synth {
 |-------|-------|-----|
 | Module returns -1 | Execution timeout (epoch deadline exceeded) | Increase `set_epoch_deadline()` |
 | HTTP callout fails | Upstream not in allowlist | Add to `set_allowed_upstreams()` |
-| Module panics on config | Invalid JSON | Validate config schema; use `unwrap_or_default()` |
+| Module panics on config | Invalid JSON or invalid field values | Validate both syntax and values before using the configuration |
 | Large `.wasm` binary | Debug info included | Use `opt-level = "s"`, `lto = true`, `strip = "debuginfo"` |

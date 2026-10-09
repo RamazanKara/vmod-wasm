@@ -22,8 +22,8 @@ at once.
 For production edge security deployments, use the standalone
 [vmod-wasm Edge Security Filter](https://github.com/RamazanKara/vmod-wasm-edge-security-filter)
 repository and its release assets. The in-tree `edge-security-filter/` module is
-kept here so vmod-wasm can test a realistic Proxy-Wasm workload without pulling
-from another repository during CI.
+kept here for VTC tests. Other tests build pinned JWT, signature-verifier, and
+cache-key companion filters from their repositories.
 
 ## Build
 
@@ -95,6 +95,9 @@ sub vcl_init {
 
 sub vcl_recv {
     set req.http.X-Wasm-Action = wasm.proxy_wasm_on_request("filter");
+    if (req.http.X-Wasm-Action == "-1") {
+        return (synth(503, "Wasm execution failed"));
+    }
     if (req.http.X-Wasm-Action != "0") {
         return (synth(std.integer(req.http.X-Wasm-Action, 403), "Blocked"));
     }
@@ -107,7 +110,8 @@ sub vcl_deliver {
 
 ## Test
 
-From the repository root:
+From the repository root after `./autogen.sh` and `./configure` (see the root
+README for native prerequisites):
 
 ```bash
 make test

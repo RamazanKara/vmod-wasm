@@ -10,12 +10,14 @@ that matter before you allow modules to process real traffic.
 
 ### Memory Isolation
 - Each Wasm module has its own linear memory, cannot access host memory
-- Memory limit (`set_memory_limit`) prevents allocation exhaustion
+- Memory limit (`set_memory_limit`) caps Wasm linear memory, not all host allocations
 - No shared memory between Wasm instances
 
 ### Execution Isolation
 - Epoch-based time limits prevent infinite loops and CPU exhaustion
-- Each request gets a fresh instance — no state leakage between requests
+- Executions use fresh stores unless a Proxy-Wasm store pool is explicitly enabled
+- Pool checkout restores only the initial linear-memory snapshot; globals,
+  tables, and grown memory are not reset. Pool only compatible modules
 - Wasm modules cannot directly access the filesystem, network, or host system
   calls
 - All host interaction goes through explicitly defined host functions
@@ -32,11 +34,11 @@ that matter before you allow modules to process real traffic.
 
 ### Malicious Wasm Module
 - **CPU exhaustion**: Mitigated by epoch-based time limits
-- **Memory exhaustion**: Mitigated by memory limits
+- **Memory exhaustion**: Linear memory is limited; shared data and host allocations need separate capacity planning
 - **SSRF via HTTP callouts**: Mitigated by upstream allowlist
 - **Amplification attacks**: Mitigated by HTTP call rate limit
 - **Information leakage**: Modules only see headers/body explicitly passed
-- **Denial of service**: Fail-closed mode ensures failures block rather than pass
+- **Execution failures**: Fail-closed mode returns an error; VCL must handle it
 
 ### Supply Chain Attacks
 - Only load `.wasm` files from trusted sources
@@ -79,8 +81,9 @@ following security considerations:
 
 ### Shared Data
 - `proxy_get_shared_data` / `proxy_set_shared_data`: Thread-safe key-value store
-- Shared across all Wasm instances (use for caching, counters)
+- Shared across modules and loaded VCLs in the process; no per-module namespace
 - Protected by RWLock (FNV-1a hash-based lookup)
+- No TTL, eviction, or key deletion; empty values retain their keys
 
 ### Metrics
 - `proxy_define_metric` / `proxy_record_metric` / `proxy_get_metric`: Thread-safe
@@ -121,15 +124,16 @@ sha256sum -c edge_security_filter.wasm.sha256
 
 ### Trusted Build Pipeline
 
-All `.wasm` modules should be built in CI — never deploy locally-built
-binaries to production.
+Build `.wasm` modules from reviewed source and run the local build/test gate.
+CI can run the same checks when available; an unrun workflow is not evidence
+that an artifact passed validation.
 
 Recommended pipeline:
 
 1. **Source**: Tag a release in the module repository
-2. **Build**: CI builds the module in a reproducible Docker environment
-3. **Verify**: CI checks binary size, runs clippy, cargo audit, and VTC tests
-4. **Sign**: Attach SHA256 checksums to the GitHub release
+2. **Build**: Build the module using locked dependencies
+3. **Verify**: Run `make lint check build` and `make audit` locally
+4. **Checksums**: Generate SHA256 checksums for the tested artifacts
 5. **Deploy**: Pull verified `.wasm` from the release (not from arbitrary sources)
 
 ### SBOM (Software Bill of Materials)
@@ -153,7 +157,8 @@ cd examples
 cargo audit
 ```
 
-CI should fail if any advisory affects a production dependency.
+Review advisories before deploying affected dependencies. The minimal CI gate
+does not install or run `cargo-audit`; `make audit` is a separate local check.
 
 ### Binary Size Monitoring
 
@@ -176,7 +181,7 @@ untrusted input:
 |--------|-----------|
 | Malformed User-Agent (injection) | Case-insensitive substring match only; no regex evaluation |
 | Rate limit bypass (IP spoofing) | Relies on trusted `X-Forwarded-For` from upstream load balancer |
-| Shared data exhaustion | Time-bucketed keys; old buckets naturally expire |
+| Shared data exhaustion | Unmitigated in the fixture: time-bucketed keys do not expire |
 | Auth service DoS | HTTP call limit + timeout; circuit breaker in http_pool |
-| Config injection | Product config rejects unknown fields; the fixture falls back to defaults on malformed JSON |
-| Integer overflow in counters | u64 counters; overflow at 2^64 is not reachable |
+| Invalid configuration | The fixture falls back to defaults on malformed JSON; a zero window uses 60 seconds |
+| Counter overflow / shared-data errors | The fixture is not a hardened rate limiter; errors fail open |

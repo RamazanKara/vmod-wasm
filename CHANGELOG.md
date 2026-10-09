@@ -198,7 +198,7 @@ All notable changes to vmod-wasm will be documented in this file.
 
 ### Changed
 - Unit tests removed from build (cannot link standalone against Varnish internals);
-  all testing via VTC integration tests (19 tests, full coverage)
+  testing via 19 VTC integration tests (no measured coverage percentage)
 - WASI stubs upgraded from no-ops to real implementations with proper WASI errno codes
 
 ## [3.0.0] - 2026-05-06

@@ -28,6 +28,7 @@
 
 struct vwasm_shared_entry {
 	char			*key;
+	size_t			 key_len;
 	uint8_t			*value;
 	size_t			 value_len;
 	uint32_t		 cas;
@@ -77,6 +78,7 @@ struct vwasm_queue_msg {
 struct vwasm_queue {
 	char			*vm_id;
 	char			*name;
+	size_t			 name_len;
 	uint32_t		 id;
 	struct vwasm_queue_msg	*head;
 	struct vwasm_queue_msg	*tail;

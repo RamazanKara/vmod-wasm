@@ -32,7 +32,8 @@ ENV LD_LIBRARY_PATH=/opt/wasmtime/lib
 # Install Rust (for building test Wasm modules)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
     && . "$HOME/.cargo/env" \
-    && rustup target add wasm32-unknown-unknown
+    && rustup target add wasm32-unknown-unknown \
+    && rustup component add clippy rustfmt
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
@@ -42,7 +43,7 @@ COPY . .
 
 # Build all Wasm example modules via workspace
 RUN cd examples \
-    && cargo build --release --target wasm32-unknown-unknown \
+    && cargo build --locked --release --target wasm32-unknown-unknown \
     && mkdir -p /src/tests/wasm \
     && cp target/wasm32-unknown-unknown/release/test_module.wasm /src/tests/wasm/ \
     && cp target/wasm32-unknown-unknown/release/proxy_wasm_filter.wasm /src/tests/wasm/ \
